@@ -1,0 +1,9 @@
+# outputs (made from other people's models or game files: never committed)
+out/
+*.glb
+*.gif
+*.mesh
+*.skeleton
+__pycache__/
+*.pyc
+.vs/

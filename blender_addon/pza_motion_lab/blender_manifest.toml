@@ -1,0 +1,14 @@
+schema_version = "1.0.0"
+
+id = "pza_motion_lab"
+version = "0.1.0"
+name = "PZA's Kenshi Motion Lab"
+tagline = "Auto-rig a model and animate it from code, for Kenshi"
+maintainer = "PZA"
+type = "add-on"
+tags = ["Animation", "Rigging"]
+blender_version_min = "4.2.0"
+license = ["SPDX:GPL-3.0-or-later"]
+
+[permissions]
+files = "Writes the rigged model, report and limb landmarks to the folder you choose"
