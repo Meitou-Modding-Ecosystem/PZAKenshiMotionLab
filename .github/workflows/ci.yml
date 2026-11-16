@@ -1,9 +1,9 @@
 name: CI
 on:
   pull_request:
-    branches: [master]
+    branches: [master, release]
   push:
-    branches: [master]
+    branches: [master, release]
 permissions:
   contents: read
 concurrency:
@@ -19,3 +19,20 @@ jobs:
         python tests/test_no_pillow.py
         python tests/fuzz/fuzz_glb.py 400
         python tools/build_addon.py
+  release-readiness:
+    name: Release readiness
+    if: always()
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require all prerequisite checks
+        env:
+          RESULTS: ${{ join(needs.*.result, ',') }}
+        run: |
+          python - <<'PYCODE'
+          import os
+          results = os.environ['RESULTS'].split(',')
+          if not results or any(result != 'success' for result in results):
+              raise SystemExit('A required check failed, was cancelled, or was skipped')
+          PYCODE
