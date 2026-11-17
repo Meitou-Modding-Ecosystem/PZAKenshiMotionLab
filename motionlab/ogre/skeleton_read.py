@@ -1,5 +1,6 @@
 # Ogre binary .skeleton reader: bones, hierarchy, animations. Author: PZA.
-# usage: python -I ogre_skeleton_read.py <file.skeleton> [animation substring]
+# usage: python skeleton_read.py <file.skeleton> [animation substring]
+# Quaternions are returned as stored in the file: x, y, z, w (Ogre's order).
 import struct, sys
 
 HEADER, BLENDMODE, BONE, BONE_PARENT, ANIMATION, ANIM_BASEINFO, TRACK, KEYFRAME, LINK = \
@@ -40,10 +41,12 @@ def read(path):
         elif cid == ANIM_BASEINFO:
             s(); f(1)
         elif cid == TRACK:
+            if not anims: raise ValueError('animation track before any animation')
             bh = u16(); anims[-1][2][bh] = []
         elif cid == KEYFRAME:
             t = f(1)[0]; q = f(4); tr = f(3)
             sc = (1.0, 1.0, 1.0) if next_is_chunk() else f(3)
+            if not anims or bh is None or bh not in anims[-1][2]: raise ValueError('keyframe outside an animation track')
             anims[-1][2][bh].append((t, q, tr, sc))
         elif cid == LINK:
             s(); f(1)

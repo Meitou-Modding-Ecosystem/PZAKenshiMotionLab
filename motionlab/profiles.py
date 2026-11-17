@@ -150,7 +150,9 @@ _cache = None
 def table():
     global _cache
     if _cache is None:
-        _cache = json.load(open(DATA, encoding='utf-8')) if os.path.exists(DATA) else {}
+        _cache = {}
+        if os.path.exists(DATA):
+            with open(DATA, encoding='utf-8') as f: _cache = json.load(f)
     return _cache
 
 

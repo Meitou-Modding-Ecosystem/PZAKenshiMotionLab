@@ -1,5 +1,5 @@
 # PZA's Kenshi Motion Lab - Kenshi / Ogre .mesh (+ .skeleton) into a Model. Author: PZA. GPLv3.
-# The readers next to this file are PZA's handoff tools (mesh_read.py, skeleton_read.py), copied.
+# Uses the two small readers next to this file (mesh_read.py, skeleton_read.py), also by PZA.
 import os
 import numpy as np
 from .. import mathx as mx
@@ -23,6 +23,18 @@ def _sub_arrays(g):
     return pos, nrm, uv
 
 
+def _triangles(idx, op):
+    """Index list -> triangles for Ogre's triangle list (4), strip (5) and fan (6); other operations have none."""
+    idx = np.array(idx, np.int64)
+    if op == 4: return idx[:len(idx) // 3 * 3].reshape(-1, 3)
+    if op == 5 and len(idx) >= 3:
+        t = np.stack([idx[:-2], idx[1:-1], idx[2:]], 1)
+        t[1::2] = t[1::2][:, [1, 0, 2]]                 # every other strip triangle flips its winding
+        return t
+    if op == 6 and len(idx) >= 3: return np.stack([np.full(len(idx) - 2, idx[0]), idx[1:-1], idx[2:]], 1)
+    return np.zeros((0, 3), np.int64)
+
+
 def load_mesh(path, skeleton_path=None, units_per_metre=KENSHI_UNITS_PER_METRE):
     m = mesh_read.read(path)
     P, N, UV, T, parts, BW = [], [], [], [], [], []
@@ -31,13 +43,18 @@ def load_mesh(path, skeleton_path=None, units_per_metre=KENSHI_UNITS_PER_METRE):
         g = s['geometry'] or m['shared']
         if g is None: continue
         if s['geometry'] is None:
+            tri = _triangles(s['indices'], s.get('op', 4))
             if shared_done:
-                parts.append({'material': None, 'tri_start': sum(len(x) for x in T), 'tri_count': len(s['indices']) // 3})
-                T.append(np.array(s['indices'], np.int64).reshape(-1, 3) + shared_base); continue
+                parts.append({'material': None, 'tri_start': sum(len(x) for x in T), 'tri_count': len(tri)})
+                T.append(tri + shared_base); continue
             shared_done = True; shared_base = base
+            for vi, bone, w in m.get('shared_bones', []): BW.append((vi + base, bone, w))   # shared vertices: mesh-level skin
+        else:
+            tri = _triangles(s['indices'], s.get('op', 4))
         pos, nrm, uv = _sub_arrays(g)
-        parts.append({'material': None, 'tri_start': sum(len(x) for x in T), 'tri_count': len(s['indices']) // 3, 'ogre_material': s['material']})
-        T.append(np.array(s['indices'], np.int64).reshape(-1, 3) + base)
+        if len(tri) and tri.max() >= len(pos): raise ValueError('submesh index past its vertices')
+        parts.append({'material': None, 'tri_start': sum(len(x) for x in T), 'tri_count': len(tri), 'ogre_material': s['material']})
+        T.append(tri + base)
         for vi, bone, w in s['bones']: BW.append((vi + base, bone, w))
         P.append(pos); N.append(nrm); UV.append(uv); base += len(pos)
     mo = Model()
@@ -58,7 +75,7 @@ def load_mesh(path, skeleton_path=None, units_per_metre=KENSHI_UNITS_PER_METRE):
         hidx = {h: i for i, h in enumerate(handles)}
         sk = Skeleton()
         for h in handles:
-            name, pos, qxyzw, sc = bones[h]          # Ogre files store quaternions x, y, z, w (as LEAF SkeletonFile.h notes)
+            name, pos, qxyzw, sc = bones[h]          # Ogre files store quaternions x, y, z, w (Ogre's order)
             sk.names.append(name); sk.parents.append(hidx[parents[h]] if h in parents else -1)
             sk.rest_t.append(np.array(pos, float) * k); sk.rest_q.append(mx.norm(np.array(qxyzw, float))); sk.rest_s.append(np.array(sc, float))
         nv = len(mo.verts)

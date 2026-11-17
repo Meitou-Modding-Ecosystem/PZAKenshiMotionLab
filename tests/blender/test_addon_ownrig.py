@@ -28,6 +28,8 @@ clips = json.loads(arm['motionlab_clips']) if arm else []
 ok(clips == ['idle', 'walk', 'run'], 'clips for a person: %s' % clips)
 ok(arm.get('motionlab_plan') == 'biped', 'plan: %s' % arm.get('motionlab_plan'))
 ok(src_arm.hide_get() and mesh.hide_get(), 'original model and its old armature hidden')
+vis = [o.name for o in bpy.context.scene.objects if o.type == 'MESH' and not o.hide_get()]
+ok(len(vis) == 1, 'only the rigged mesh is visible (bone helpers hidden): %s' % vis)
 bpy.context.view_layer.objects.active = arm
 bpy.ops.motionlab.play(clip='walk')
 sc = bpy.context.scene; pb = arm.pose.bones['Bip01 L Calf']

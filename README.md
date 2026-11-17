@@ -87,8 +87,8 @@ Options for `rig`: `--ground-wings hidden|folded` (default hidden: wings vanish 
 ## How it works
 
 **Frame.** Up is +Y. The body's long axis is turned to face +Z (glTF's forward), centred on the leg pairs, and its
-lowest point is put on the ground (y = 0). The report says how much it turned (a Meshy model we tested was turned about 22
-degrees in its file, which made its own rig look lopsided).
+lowest point is put on the ground (y = 0). The report says how much it turned (generated models are often exported a
+little turned, which can make their own rig look lopsided).
 
 **Body and limbs.** The mesh is voxelised and filled (it does not need to be watertight). Opening the solid (erode,
 then dilate) keeps the thick body and removes everything thin; what is left falls apart into limbs. Inside each limb,
@@ -120,7 +120,7 @@ strongest (Kenshi's GPU reads 3).
   target, then bends at the knee (upper and lower leg kept rigid, the knee stays on the side it bends to at rest), so
   knees visibly work and feet keep their angle to the shin. The stride is capped so every leg can reach. Straight-legged
   models stand with a slight bend and crouch more while walking and running to get a real stride.
-- *Lifted legs*: a leg whose tip rests off the ground (the bee's raised hind leg) rides along and does not plant.
+- *Lifted legs*: a leg whose tip rests off the ground (a raised hind leg, say) rides along and does not plant.
 - *Wings*: spread out sideways, beat at 7.5 Hz (4 frames per beat at 30 fps), with a twist for a figure-eight. On the
   ground they are scaled to nothing at their hinge (easier than unfurling them); take-off grows them back in 0.25 s,
   landing shrinks them in the last 0.25 s.

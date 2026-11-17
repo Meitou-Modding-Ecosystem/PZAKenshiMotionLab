@@ -135,7 +135,9 @@ def rig_file(model_path, out_dir, log=print, **kw):
     else:
         model, lm = autorig.analyse(src, plan=a.plan, legs_bones=a.leg_bones, log=log)
         if a.landmarks:
-            ed = a.landmarks if isinstance(a.landmarks, dict) else json.load(open(a.landmarks, encoding='utf-8'))
+            if isinstance(a.landmarks, dict): ed = a.landmarks
+            else:
+                with open(a.landmarks, encoding='utf-8') as f: ed = json.load(f)
             _apply_edits(lm, ed, log)
         sk, rigmap = rigbuild.build_skeleton(lm, leg_bones=a.leg_bones, wing_bones=a.wing_bones,
                                              antenna_bones=a.antenna_bones, abdomen_bones=a.abdomen_bones, log=log)
@@ -152,21 +154,23 @@ def rig_file(model_path, out_dir, log=print, **kw):
         clips.append(bake.bake(drv, d, fps=a.fps))
         checks[d.name] = check.foot_check(drv, d, fps=a.fps)
     glb = os.path.join(a.out, name + '_rigged.glb')
-    size = gltf.write_glb(glb, model, clips)
+    size = gltf.write_glb(glb, model, clips, tails=rigmap.get('tails'))
     log('wrote %s (%.1f MB, %d bones, %d clips)' % (glb, size / 1e6, len(sk), len(clips)))
     # read it back: the clips in the file are what the GIFs show
     rc = gltf.read_clips(glb)
     back = gltf.load_glb(glb)
     rest_err = float(np.abs(back.verts - model.verts).max())
     lmj = os.path.join(a.out, name + '.landmarks.json')
-    if lm is not None: json.dump(autorig.public(lm), open(lmj, 'w', encoding='utf-8'), indent=1)
+    if lm is not None:
+        with open(lmj, 'w', encoding='utf-8') as f: json.dump(autorig.public(lm), f, indent=1)
     else: lmj = None
     draw = lm if lm is not None else _rig_lm(model, rigmap, drv)
     rmj = os.path.join(a.out, name + '.motion.json')
-    json.dump({'name': name, 'tool': "PZA's Kenshi Motion Lab", 'version': autorig.VERSION, **rigmap,
-               'clips': [{'name': c.name, 'length_s': float(c.times[-1]), 'loop': c.loop, 'ground_speed_m_s': c.speed,
-                          'note': c.note} for c in clips], 'crouch_m': drv.crouch, 'ground_wings': a.ground_wings},
-              open(rmj, 'w', encoding='utf-8'), indent=1)
+    with open(rmj, 'w', encoding='utf-8') as f:
+        json.dump({'name': name, 'tool': "PZA's Kenshi Motion Lab", 'version': autorig.VERSION, **rigmap,
+                   'clips': [{'name': c.name, 'length_s': float(c.times[-1]), 'loop': c.loop, 'ground_speed_m_s': c.speed,
+                              'note': c.note} for c in clips], 'crouch_m': drv.crouch, 'ground_wings': a.ground_wings},
+                  f, indent=1)
     png = os.path.join(a.out, name + '_landmarks.png')
     if a.png and have_pillow(): _landmark_png(model, draw, png)
     else: png = None
@@ -184,7 +188,7 @@ def rig_file(model_path, out_dir, log=print, **kw):
     if drv.wings: rep += ('\nWings on the ground: %s (wings shrink away on landing and grow back on take-off, 0.25 s, by '
             'scaling the wing root bones). Whether Kenshi plays bone SCALE keys is not verified yet; fallback: fold them.\n') % a.ground_wings
     rpt = os.path.join(a.out, name + '_report.md')
-    open(rpt, 'w', encoding='utf-8').write(rep)
+    with open(rpt, 'w', encoding='utf-8') as f: f.write(rep)
     gifs = []
     if a.gifs and have_pillow():
         for c in clips:

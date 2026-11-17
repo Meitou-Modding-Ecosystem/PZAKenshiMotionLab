@@ -79,30 +79,56 @@ def _export_selected(obj, path, with_rig=True):
                               export_yup=True, export_apply=False, export_skins=arm is not None)
 
 
-def _import_result(glb, name):
-    before = set(bpy.data.objects)
+def _bone_shapes(arm):
+    """Objects an armature uses only to draw its bones (the glTF importer adds an Icosphere for this)."""
+    if arm is None or arm.pose is None: return set()
+    return {pb.custom_shape for pb in arm.pose.bones if pb.custom_shape is not None}
+
+
+def _import_result(glb, name, clip_names=()):
+    before = set(bpy.data.objects); acts_before = set(bpy.data.actions)
     bpy.ops.import_scene.gltf(filepath=glb)
     new = [o for o in bpy.data.objects if o not in before]
+    new_acts = [a for a in bpy.data.actions if a not in acts_before]
     col = bpy.data.collections.new('Motion Lab: ' + name)
     bpy.context.scene.collection.children.link(col)
     for o in new:
         for c in list(o.users_collection): c.objects.unlink(o)
         col.objects.link(o)
     arm = next((o for o in new if o.type == 'ARMATURE'), None)
-    for o in new:      # the glTF importer's bone-display helper (an Icosphere) is a visible object: hide it
-        if o.type == 'MESH' and o.parent is None and len(o.data.vertices) <= 200:
-            o.hide_set(True); o.hide_render = True
+    for o in _bone_shapes(arm):                   # only the bone-display helper, never a real mesh
+        if o in new: o.hide_set(True); o.hide_render = True
+    if arm is not None:                           # remember exactly which new actions are this rig's clips
+        amap = {}
+        for nm in clip_names:
+            a = next((a for a in new_acts if a.name == nm), None) or                 next((a for a in new_acts if a.name.startswith(nm + '_') or a.name.startswith(nm + '.')), None)
+            if a is not None: amap[nm] = a.name
+        arm['motionlab_actions'] = json.dumps(amap)
     return arm, new, col
 
 
 def _clip_actions(arm):
     """The clips that belong to this armature: actions named in its stored clip list."""
     names = json.loads(arm.get('motionlab_clips', '[]'))
+    amap = json.loads(arm.get('motionlab_actions', '{}'))
     out = []
     for nm in names:
-        act = bpy.data.actions.get(nm) or next((a for a in bpy.data.actions if a.name.startswith(nm + '_') or a.name.startswith(nm + '.')), None)
+        act = bpy.data.actions.get(amap.get(nm, ''))
         if act: out.append((nm, act))
     return out
+
+
+def _load_landmarks(arm, op):
+    """The landmarks file of an auto-rigged model, or None (with a message) for a kept rig or a missing file."""
+    p = arm.get('motionlab_landmarks') or ''
+    if not p:
+        op.report({'INFO'}, 'This model kept its own rig (%s): limb markers are for auto-rigged models' % arm.get('motionlab_plan', ''))
+        return None
+    try:
+        with open(p, encoding='utf-8') as f: return json.load(f)
+    except (OSError, ValueError):
+        op.report({'ERROR'}, 'The limb data of this rig is gone (%s): rig the model again' % os.path.basename(p))
+        return None
 
 
 def _active_armature(context):
@@ -125,7 +151,7 @@ def _run(context, src_glb, name, landmarks=None):
                        ground_wings=s.ground_wings, clips=','.join(clips), fps=s.fps, gifs=False, png=False,
                        own_rig=s.own_rig)
     context.scene.render.fps = s.fps; context.scene.render.fps_base = 1.0   # keys land on the clip's own frames
-    arm, new, col = _import_result(r['glb'], r['name'])
+    arm, new, col = _import_result(r['glb'], r['name'], r['clips'])
     if arm is None: raise RuntimeError('the rigged file has no armature')
     arm['motionlab_landmarks'] = r['landmarks'] or ''; arm['motionlab_source'] = src_glb
     arm['motionlab_plan'] = r.get('plan') or ''
@@ -180,9 +206,8 @@ class MOTIONLAB_OT_rig(bpy.types.Operator):
         obj.hide_set(True); obj.hide_render = True
         if obj.parent is not None and obj.parent.type == 'ARMATURE':      # the model's old rig (e.g. Meshy's)
             obj.parent.hide_set(True); obj.parent.hide_render = True
-            for o in context.scene.objects:                                   # and its bone-display helper
-                if o.type == 'MESH' and o.parent is None and o.name.startswith('Icosphere') and len(o.data.vertices) <= 200:
-                    o.hide_set(True); o.hide_render = True
+            for o in _bone_shapes(obj.parent):                                # and its bone-display helper
+                o.hide_set(True); o.hide_render = True
         for o in context.selected_objects: o.select_set(False)
         arm.select_set(True); context.view_layer.objects.active = arm
         fr = r['frame']
@@ -216,10 +241,8 @@ class MOTIONLAB_OT_markers(bpy.types.Operator):
     def execute(self, context):
         arm = _active_armature(context)
         if arm is None: self.report({'ERROR'}, 'rig a model first'); return {'CANCELLED'}
-        if not arm.get('motionlab_landmarks'):
-            self.report({'INFO'}, 'This model kept its own rig (%s): limb markers are for auto-rigged models' % arm.get('motionlab_plan', ''))
-            return {'CANCELLED'}
-        lm = json.load(open(arm['motionlab_landmarks'], encoding='utf-8'))
+        lm = _load_landmarks(arm, self)
+        if lm is None: return {'CANCELLED'}
         col = bpy.data.collections.get(MARKERS) or bpy.data.collections.new(MARKERS)
         if col.name not in context.scene.collection.children: context.scene.collection.children.link(col)
         for o in list(col.objects): bpy.data.objects.remove(o, do_unlink=True)
@@ -249,7 +272,8 @@ class MOTIONLAB_OT_rebuild(bpy.types.Operator):
         arm = _active_armature(context)
         col = bpy.data.collections.get(MARKERS)
         if arm is None or col is None: self.report({'ERROR'}, 'show the limb markers first'); return {'CANCELLED'}
-        lm = json.load(open(arm['motionlab_landmarks'], encoding='utf-8'))
+        lm = _load_landmarks(arm, self)
+        if lm is None: return {'CANCELLED'}
         limbs = {}
         for o in col.objects:
             if o.get('motionlab_armature') != arm.name: continue

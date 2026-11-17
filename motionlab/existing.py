@@ -87,7 +87,7 @@ def _motionlab_map(model):
     W = sk.world_rest()
     rm = {'plan': 'insect', 'units': 'metres', 'forward': '+Z', 'up': '+Y', 'root': 'root', 'body': 'body', 'head': 'head',
           'spine': sorted(n for n in names if re.match(r'^abdomen_\d+$', n)), 'legs': [], 'wings': [], 'antennae': [],
-          'arms': [], 'tails': {}, 'source_rig': 'motionlab'}
+          'arms': [], 'tails': dict(getattr(sk, 'tails', {}) or {}), 'source_rig': 'motionlab'}
     groups = {}
     for n in sk.names:
         m = re.match(r'^((leg|wing|antenna)_[LR]\d*)_(\d+)$', n)
@@ -95,8 +95,8 @@ def _motionlab_map(model):
     lo, hi = model.bounds(); H = float(hi[1] - lo[1])
     for (kind, nm), bones in sorted(groups.items()):
         bones.sort()
-        last = sk.index(bones[-1]); tip = W[last][:3, 3] + W[last][:3, 1] * 0.0
-        ch = sk.children(last)
+        last = sk.index(bones[-1])
+        tip = np.array(rm['tails'][bones[-1]]) if bones[-1] in rm['tails'] else W[last][:3, 3]   # bone end when stored
         e = {'name': nm, 'side': nm.split('_')[1][0], 'bones': bones, 'tip': [float(x) for x in tip],
              'parent': sk.names[sk.parents[sk.index(bones[0])]]}
         if kind == 'leg': e['lifted'] = bool(tip[1] - lo[1] > 0.15 * H)

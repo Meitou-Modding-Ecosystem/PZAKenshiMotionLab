@@ -41,5 +41,5 @@ for plan in ('biped', 'quadruped'):
         med[kind] = m
     out['median'][plan] = med
 os.makedirs(os.path.dirname(profiles.DATA), exist_ok=True)
-json.dump(out, open(profiles.DATA, 'w', encoding='utf-8'), indent=1)
+with open(profiles.DATA, 'w', encoding='utf-8') as f: json.dump(out, f, indent=1)
 print('wrote', profiles.DATA, '(%d skeletons)' % len(out['skeletons']))

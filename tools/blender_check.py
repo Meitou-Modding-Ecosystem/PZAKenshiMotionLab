@@ -19,4 +19,4 @@ out = {'file': path, 'armatures': len(arm), 'bones': len(arm[0].data.bones) if a
                          key=lambda x: x['name'])}
 print('BLENDER_CHECK ' + json.dumps(out))
 if len(argv) > 1:
-    json.dump(out, open(argv[1], 'w'), indent=1)
+    with open(argv[1], 'w') as f: json.dump(out, f, indent=1)

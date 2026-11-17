@@ -35,5 +35,18 @@ ok(sorted(gltf.read_clips(r['glb'])) == ['idle', 'run', 'walk'], 'clips in the f
 # the walk moves the legs and swings the arms
 rc = gltf.read_clips(r['glb'])['walk']
 ok('Bip01 L UpperArm' in rc and np.ptp(rc['Bip01 L UpperArm']['rotation'], axis=0).max() > 0.05, 'arms swing in the walk')
+# a model the Motion Lab rigged earlier can be re-animated: its bone ends travel in the .glb, its rig is kept
+from synthetic import make_hexapod
+d2 = tempfile.mkdtemp(); src2 = os.path.join(d2, 'hex.glb')
+gltf.write_glb(src2, make_hexapod(10.0), skeleton=None)
+r1 = pipeline.rig_file(src2, d2, log=lambda *a: None, png=False, clips='walk')
+r2 = pipeline.rig_file(r1['glb'], os.path.join(d2, 'again'), log=lambda *a: None, png=False, clips='walk,idle', name='again')
+ok(r2['own_rig'] and r2['bones'] == r1['bones'], 're-animating a Motion Lab rig keeps it (%d bones)' % r2['bones'])
+first = gltf.load_glb(r1['glb']); rm2 = existing.rigmap_from_skeleton(first)
+ok(all(np.allclose(e['tip'], first.skeleton.tails[e['bones'][-1]]) for e in rm2['legs']), 'leg tips come from the stored bone ends')
+drv2 = motion.Driver(motion.Rig(first.skeleton, rm2))
+ck = check.foot_check(drv2, [c for c in motion.standard_clips(drv2) if c.name == 'walk'][0])
+miss2 = max(ck['ik_miss_m'].values(), default=0)
+ok(miss2 < 0.01, 're-animated walk keeps its feet (miss %.4f m)' % miss2)
 print('\n%d failed' % len(fails) if fails else '\nall passed')
 sys.exit(1 if fails else 0)

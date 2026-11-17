@@ -46,3 +46,27 @@ for it in range(N):
     worst = max(worst, time.time() - t)
     if time.time() - t > 10: print('FAIL: iteration %d took %.1f s' % (it, time.time() - t)); sys.exit(1)
 print('fuzz_glb: %d iterations, %d loaded, %d refused, slowest %.2f s: PASS' % (N, stats['loaded'], stats['rejected'], worst))
+
+# crafted cases from the pre-release audit: each must be refused as GlbError (or read correctly), never another crash
+def rebuild(js, binc):
+    jb = json.dumps(js).encode(); jb += b' ' * ((4 - len(jb) % 4) % 4)
+    total = 12 + 8 + len(jb) + 8 + len(binc)
+    return struct.pack('<4sII', b'glTF', 2, total) + struct.pack('<II', len(jb), 0x4E4F534A) + jb + struct.pack('<II', len(binc), 0x004E4942) + binc
+js0, bin0 = gltf.read_glb_raw(good)
+def case(name, edit, expect_ok=False):
+    js = json.loads(json.dumps(js0)); edit(js)
+    try:
+        gltf.load_glb(rebuild(js, bin0)); res = 'loaded'
+    except gltf.GlbError as ex: res = 'refused (%s)' % ex
+    except Exception as ex: print('FAIL crafted %s: %s %s' % (name, type(ex).__name__, ex)); sys.exit(1)
+    if expect_ok and res != 'loaded': print('FAIL crafted %s: %s' % (name, res)); sys.exit(1)
+    print('  crafted %-28s %s' % (name, res))
+prim = lambda js: js['meshes'][0]['primitives'][0]
+case('negative accessor index', lambda js: prim(js)['attributes'].__setitem__('POSITION', -1))
+case('JOINTS without WEIGHTS', lambda js: prim(js)['attributes'].pop('WEIGHTS_0'))
+case('skin with no joint data', lambda js: [prim(js)['attributes'].pop(k) for k in ('JOINTS_0', 'WEIGHTS_0')], expect_ok=True)
+case('negative joint node', lambda js: js['skins'][0]['joints'].__setitem__(0, -1))
+case('stride smaller than element', lambda js: js['bufferViews'][js['accessors'][prim(js)['attributes']['POSITION']]['bufferView']].__setitem__('byteStride', 4))
+case('zero-scale joint', lambda js: js['nodes'][js['skins'][0]['joints'][0]].__setitem__('scale', [0, 0, 0]))
+case('bool as index', lambda js: prim(js).__setitem__('indices', True))
+print('crafted cases: PASS')

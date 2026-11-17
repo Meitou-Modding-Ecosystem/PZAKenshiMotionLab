@@ -15,12 +15,25 @@ class GlbError(ValueError):
     pass
 
 
+def _at(lst, i, what):
+    """lst[i] for an index read from the file: refused unless it is a real, in-range, non-negative index."""
+    if not isinstance(lst, list) or isinstance(i, bool) or not isinstance(i, int) or not 0 <= i < len(lst):
+        raise GlbError('%s index %r is out of range' % (what, i))
+    return lst[i]
+
+
 def read_glb_raw(path_or_bytes):
-    d = path_or_bytes if isinstance(path_or_bytes, (bytes, bytearray)) else open(path_or_bytes, 'rb').read()
+    if isinstance(path_or_bytes, (bytes, bytearray)):
+        d = path_or_bytes
+    else:
+        import os
+        if os.path.getsize(path_or_bytes) > MAX_GLB: raise GlbError('file is larger than %d MB' % (MAX_GLB >> 20))
+        with open(path_or_bytes, 'rb') as f: d = f.read()
+    if len(d) > MAX_GLB: raise GlbError('file is larger than %d MB' % (MAX_GLB >> 20))
     if len(d) < 20 or d[:4] != b'glTF': raise GlbError('not a .glb file (no glTF magic)')
     ver, total = struct.unpack_from('<II', d, 4)
     if ver != 2: raise GlbError('glTF version %d, only 2 is supported' % ver)
-    if total > len(d) or total > MAX_GLB: raise GlbError('length field %d is past the file (%d)' % (total, len(d)))
+    if total > len(d): raise GlbError('length field %d is past the end of the file (%d bytes)' % (total, len(d)))
     p = 12; js = None; binc = b''
     while p + 8 <= total:
         ln, typ = struct.unpack_from('<II', d, p); p += 8
@@ -33,24 +46,24 @@ def read_glb_raw(path_or_bytes):
 
 
 def accessor(js, binc, i):
-    a = js['accessors'][i]
+    a = _at(js.get('accessors'), i, 'accessor')
+    if a.get('type') not in NC or a.get('componentType') not in CT: raise GlbError('accessor %d: unknown type' % i)
     n = NC[a['type']]; dt = np.dtype(CT[a['componentType']]); cnt = int(a['count'])
     if cnt < 0 or cnt > 50_000_000: raise GlbError('accessor %d: bad count %d' % (i, cnt))
     if 'bufferView' not in a:
         out = np.zeros((cnt, n), dt)
     else:
-        bv = js['bufferViews'][a['bufferView']]
+        bv = _at(js.get('bufferViews'), a['bufferView'], 'bufferView')
         if bv.get('buffer', 0) != 0: raise GlbError('external buffers are not supported (GLB only)')
         off = int(bv.get('byteOffset', 0)) + int(a.get('byteOffset', 0))
         stride = int(bv.get('byteStride', 0)) or n * dt.itemsize
         need = off + stride * (cnt - 1) + n * dt.itemsize if cnt else off
         if off < 0 or need > len(binc): raise GlbError('accessor %d runs past the binary chunk' % i)
+        if stride < n * dt.itemsize: raise GlbError('accessor %d: byteStride %d is smaller than one element' % (i, stride))
         if stride == n * dt.itemsize:
             out = np.frombuffer(binc, dt, cnt * n, off).reshape(cnt, n).copy()
-        else:
-            out = np.empty((cnt, n), dt)
-            for k in range(cnt):
-                out[k] = np.frombuffer(binc, dt, n, off + k * stride)
+        else:                                   # interleaved: one strided view, no per-element loop
+            out = np.ndarray(shape=(cnt, n), dtype=dt, buffer=binc, offset=off, strides=(stride, dt.itemsize)).copy()
     if 'sparse' in a: raise GlbError('sparse accessors are not supported')
     if a.get('normalized') and dt.kind in 'ui':
         out = out.astype(np.float64) / np.iinfo(dt).max
@@ -87,7 +100,7 @@ def load_glb(path):
     if not mesh_nodes: raise GlbError('the file holds no mesh')
     skinned = [i for i in mesh_nodes if 'skin' in nodes[i]]
     mi = (skinned or mesh_nodes)[0]
-    mnode = nodes[mi]; mesh = js['meshes'][mnode['mesh']]
+    mnode = nodes[mi]; mesh = _at(js.get('meshes'), mnode['mesh'], 'mesh')
     pos, nrm, uv, tris, J, Wt, parts, extra = [], [], [], [], [], [], [], {}
     base = 0
     for pi, prim in enumerate(mesh['primitives']):
@@ -102,10 +115,16 @@ def load_glb(path):
         for k in at:
             if k not in ('POSITION', 'NORMAL', 'TEXCOORD_0') and not k.startswith(('JOINTS_', 'WEIGHTS_')):
                 extra.setdefault(k, []).append(accessor(js, binc, at[k]).astype(np.float64))
-        if 'skin' in mnode and 'JOINTS_0' in at:
-            jj = [accessor(js, binc, at[k]).astype(np.int64) for k in sorted(a for a in at if a.startswith('JOINTS_'))]
-            ww = [accessor(js, binc, at[k]).astype(np.float64) for k in sorted(a for a in at if a.startswith('WEIGHTS_'))]
-            J.append(np.concatenate(jj, 1)); Wt.append(np.concatenate(ww, 1))
+        if 'skin' in mnode:
+            jk = sorted(a for a in at if a.startswith('JOINTS_')); wk = sorted(a for a in at if a.startswith('WEIGHTS_'))
+            if len(jk) != len(wk): raise GlbError('primitive %d: JOINTS and WEIGHTS sets do not pair up' % pi)
+            if jk:
+                jj = np.concatenate([accessor(js, binc, at[k]).astype(np.int64) for k in jk], 1)
+                ww = np.concatenate([accessor(js, binc, at[k]).astype(np.float64) for k in wk], 1)
+                if len(jj) != nv or len(ww) != nv or jj.shape != ww.shape: raise GlbError('primitive %d: skin data does not match its vertices' % pi)
+            else:                               # an unskinned primitive in a skinned mesh: no weights (follows its node)
+                jj = np.zeros((nv, 4), np.int64); ww = np.zeros((nv, 4))
+            J.append(jj); Wt.append(ww)
         parts.append({'material': prim.get('material'), 'tri_start': len(tris) and sum(len(t) for t in tris), 'tri_count': len(I) // 3})
         pos.append(P); nrm.append(N); uv.append(T); tris.append(I.reshape(-1, 3) + base); base += nv
     if not pos: raise GlbError('no triangle primitives in the mesh')
@@ -115,16 +134,21 @@ def load_glb(path):
     m.extra_attrs = {k: np.concatenate(v) for k, v in extra.items() if sum(len(x) for x in v) == len(m.verts)}
     m.source = {'kind': 'glb', 'json': js, 'bin': binc, 'mesh_name': mesh.get('name', 'mesh')}
     m.name = mesh.get('name') or mnode.get('name') or 'creature'
-    if 'skin' in mnode and J:
-        skin = js['skins'][mnode['skin']]
-        joints = skin['joints']
+    if 'skin' in mnode and J and any(w.any() for w in Wt):
+        skin = _at(js.get('skins'), mnode['skin'], 'skin')
+        joints = skin.get('joints') or []
+        for j in joints: _at(nodes, j, 'joint node')
+        if not joints: raise GlbError('the skin has no joints')
         ibm = accessor(js, binc, skin['inverseBindMatrices']).astype(np.float64).reshape(-1, 4, 4).transpose(0, 2, 1) \
             if 'inverseBindMatrices' in skin else np.array([np.eye(4)] * len(joints))
+        if len(ibm) != len(joints): raise GlbError('the skin has %d joints but %d bind matrices' % (len(joints), len(ibm)))
         jset = set(joints)
-        sk = Skeleton()
+        sk = Skeleton(); sk.tails = {}
         for j in joints:
             nd = nodes[j]
             sk.names.append(nd.get('name', 'joint_%d' % j))
+            tl = (nd.get('extras') or {}).get('motionlab_tail')
+            if isinstance(tl, list) and len(tl) == 3: sk.tails[sk.names[-1]] = [float(x) for x in tl]
             p = par[j]
             while p >= 0 and p not in jset: p = par[p]
             sk.parents.append(joints.index(p) if p >= 0 else -1)
@@ -136,7 +160,10 @@ def load_glb(path):
         sk.root_world = []
         for k, j in enumerate(joints):
             sk.root_world.append(W[par[j]] if (sk.parents[k] < 0 and par[j] >= 0) else np.eye(4))
-        Jm = np.concatenate(J); Wm = np.concatenate(Wt)
+        K = max(x.shape[1] for x in J)
+        Jm = np.concatenate([np.pad(x, ((0, 0), (0, K - x.shape[1]))) for x in J])
+        Wm = np.concatenate([np.pad(x, ((0, 0), (0, K - x.shape[1]))) for x in Wt])
+        if Jm.min() < 0: raise GlbError('a vertex uses a negative joint index')
         s = Wm.sum(1, keepdims=True); Wm = np.where(s > 0, Wm / np.maximum(s, 1e-12), 0)
         if Jm.max() >= len(joints): raise GlbError('a vertex uses joint %d, the skin has %d' % (Jm.max(), len(joints)))
         # bring the mesh into world rest space (bind pose as the file shows it), so every later rig is in one space
@@ -153,7 +180,10 @@ def load_glb(path):
             Mw = W[mi]; Pw[unw] = (hp[unw] @ Mw.T)[:, :3]; Nw[unw] = m.normals[unw] @ Mw[:3, :3].T
         m.verts = Pw; m.normals = mx.norm(Nw)
         m.skeleton = sk; m.joints = Jm; m.weights = Wm
-        m.ibm = np.array([np.linalg.inv(w) for w in Wj])
+        try:
+            m.ibm = np.array([np.linalg.inv(w) for w in Wj])
+        except np.linalg.LinAlgError:
+            raise GlbError('a joint has a zero scale (its rest matrix cannot be inverted)')
     else:
         Mw = W[mi]
         m.verts = (np.c_[m.verts, np.ones(len(m.verts))] @ Mw.T)[:, :3]
@@ -206,7 +236,7 @@ class _Bin:
         self.accessors.append(a); return len(self.accessors) - 1
 
 
-def write_glb(path, model, clips=(), skeleton=None, joints=None, weights=None):
+def write_glb(path, model, clips=(), skeleton=None, joints=None, weights=None, tails=None):
     """Write `model` (world-rest geometry) skinned to `skeleton` (default model.skeleton) with `clips`
     (list of bake.Clip). Materials and images are copied from the source .glb when there is one."""
     sk = skeleton or model.skeleton
@@ -232,7 +262,8 @@ def write_glb(path, model, clips=(), skeleton=None, joints=None, weights=None):
              'NORMAL': b.acc(mx.norm(model.normals), 5126, 'VEC3', 34962),
              'TEXCOORD_0': b.acc(model.uvs, 5126, 'VEC2', 34962)}
     for k, v in (model.extra_attrs or {}).items():
-        typ = {1: 'SCALAR', 2: 'VEC2', 3: 'VEC3', 4: 'VEC4'}[v.shape[1]]
+        typ = {1: 'SCALAR', 2: 'VEC2', 3: 'VEC3', 4: 'VEC4'}.get(v.shape[1])
+        if typ is None: continue                 # matrix-shaped extras are not vertex attributes we carry over
         attrs[k] = b.acc(v, 5126, typ, 34962)
     nodes = []
     if sk is not None:
@@ -257,6 +288,8 @@ def write_glb(path, model, clips=(), skeleton=None, joints=None, weights=None):
             nd = {'name': nm, 'translation': [float(x) for x in sk.rest_t[i]],
                   'rotation': [float(x) for x in mx.norm(sk.rest_q[i])]}
             if np.any(np.abs(np.asarray(sk.rest_s[i]) - 1) > 1e-9): nd['scale'] = [float(x) for x in sk.rest_s[i]]
+            tl = (tails or {}).get(nm)
+            if tl is not None: nd['extras'] = {'motionlab_tail': [float(x) for x in tl]}   # bone end, world rest (m)
             nodes.append(nd)
         for i, p in enumerate(sk.parents):
             if p < 0: root['children'].append(first + i)

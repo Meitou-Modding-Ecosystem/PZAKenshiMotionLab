@@ -1,6 +1,6 @@
-# Minimal reader for Ogre binary .mesh files (MeshSerializer_v1.100 / v1.8 / v1.40), for LEAF's
-# runtime auto-cloth research. Author: PZA. Read-only: prints a summary of the geometry.
-# usage: python -I ogre_mesh_read.py <file.mesh> [--verts N]
+# Minimal reader for Ogre binary .mesh files (MeshSerializer_v1.100 / v1.8 / v1.40). Author: PZA. Read-only:
+# returns submeshes, vertex elements, bone assignments and the skeleton link (run it on a file for a summary).
+# usage: python mesh_read.py <file.mesh> [--verts N]
 import struct, sys
 
 M_HEADER = 0x1000
@@ -22,7 +22,7 @@ M_SUBMESH_NAME_TABLE = 0xA000
 SEMANTICS = {1: 'position', 2: 'blend_weights', 3: 'blend_indices', 4: 'normal', 5: 'diffuse',
              6: 'specular', 7: 'uv', 8: 'binormal', 9: 'tangent'}
 # vertex element type -> (struct format, byte size)
-TYPES = {0: ('f', 4), 1: ('2f', 8), 2: ('3f', 12), 3: ('4f', 16), 4: ('I', 4), 5: ('3h', 6),
+TYPES = {0: ('f', 4), 1: ('2f', 8), 2: ('3f', 12), 3: ('4f', 16), 4: ('I', 4), 5: ('h', 2),
          6: ('2h', 4), 7: ('3h', 6), 8: ('4h', 8), 9: ('4B', 4), 10: ('4B', 4), 11: ('4B', 4)}
 
 class R:
@@ -54,7 +54,7 @@ def read_geometry(r, end):
         elif cid == M_GEOMETRY_VERTEX_BUFFER:
             bind, vsize = r.u16(), r.u16()
             c2, l2 = r.chunk()
-            assert c2 == M_GEOMETRY_VERTEX_BUFFER_DATA, hex(c2)
+            if c2 != M_GEOMETRY_VERTEX_BUFFER_DATA: raise ValueError('vertex buffer without data chunk (0x%X)' % c2)
             g['buffers'][bind] = (vsize, r.raw(vsize * g['count']))
             r.p = start + ln
         else:
@@ -70,11 +70,11 @@ def element(g, vi, el):
 def read(path):
     d = open(path, 'rb').read()
     r = R(d)
-    assert r.u16() == M_HEADER
+    if r.u16() != M_HEADER: raise ValueError('not an Ogre .mesh file')
     version = r.s()
-    mesh = {'version': version, 'subs': [], 'shared': None, 'skeleton': None, 'mesh_bones': 0}
+    mesh = {'version': version, 'subs': [], 'shared': None, 'skeleton': None, 'mesh_bones': 0, 'shared_bones': []}
     cid, ln = r.chunk()
-    assert cid == M_MESH, hex(cid)
+    if cid != M_MESH: raise ValueError('no mesh chunk (0x%X)' % (cid or 0))
     mend = r.p - 6 + ln
     mesh['animated'] = r.b()
     while r.p < mend:
@@ -85,13 +85,15 @@ def read(path):
             sub = {'material': r.s(), 'shared': r.b()}
             n = r.u32(); i32 = r.b()
             sub['indices'] = struct.unpack_from('<%d%s' % (n, 'I' if i32 else 'H'), d, r.p); r.p += n * (4 if i32 else 2)
-            sub['geometry'] = None; sub['bones'] = []
+            sub['geometry'] = None; sub['bones'] = []; sub['op'] = 4      # 4 = triangle list (Ogre's default)
             send = start + ln
             while r.p < send:
                 s2 = r.p; c2, l2 = r.chunk()
                 if c2 == M_GEOMETRY: sub['geometry'] = read_geometry(r, s2 + l2); r.p = s2 + l2
                 elif c2 == M_SUBMESH_BONE_ASSIGNMENT:
                     sub['bones'].append((r.u32(), r.u16(), r.f32())); r.p = s2 + l2
+                elif c2 == M_SUBMESH_OPERATION:
+                    sub['op'] = r.u16(); r.p = s2 + l2
                 else: r.p = s2 + l2
             mesh['subs'].append(sub)
             r.p = send
@@ -100,7 +102,7 @@ def read(path):
         elif cid == M_MESH_SKELETON_LINK:
             mesh['skeleton'] = r.s(); r.p = start + ln
         elif cid == M_MESH_BONE_ASSIGNMENT:
-            mesh['mesh_bones'] += 1; r.p = start + ln
+            mesh['mesh_bones'] += 1; mesh['shared_bones'].append((r.u32(), r.u16(), r.f32())); r.p = start + ln
         else:
             r.p = start + ln
     return mesh

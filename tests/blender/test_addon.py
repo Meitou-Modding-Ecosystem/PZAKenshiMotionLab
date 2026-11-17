@@ -33,6 +33,8 @@ from bl_ext.user_default.pza_motion_lab import _clip_actions
 acts = _clip_actions(arm) if arm else []
 ok(len(acts) == 8, 'clips as actions: %s' % [n for n, _ in acts])
 ok(mesh.hide_get(), 'original mesh hidden')
+vis = [o.name for o in bpy.context.scene.objects if o.type == 'MESH' and not o.hide_get()]
+ok(len(vis) == 1, 'only the rigged mesh is visible (bone helpers hidden): %s' % vis)
 skinned = [o for o in bpy.context.scene.objects if o.type == 'MESH' and o.parent == arm and len(o.data.vertices) > 100]
 ok(len(skinned) == 1 and len(skinned[0].vertex_groups) >= 36, 'skinned mesh with vertex groups')
 # 3. play a clip: the walk moves the feet

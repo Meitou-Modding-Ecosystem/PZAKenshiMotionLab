@@ -274,7 +274,7 @@ class Driver:
         return self.springs[key]
 
     def pose(self, spec, dt=1 / 30):
-        """spec: dict from a clip (see clips.py). Returns (q, t, s, W)."""
+        """spec: dict from a clip (see standard_clips below). Returns (q, t, s, W)."""
         r = self.rig
         q = r.rest_q.copy(); t = r.rest_t.copy(); s = r.rest_s.copy()
         root = r.b(self.map['root']); body = r.b(self.map['body']); head = r.b(self.map['head'])
