@@ -12,8 +12,22 @@ Kenshi `.mesh` + `.skeleton`) and it:
    a wingbeat, wings that **shrink away on landing and grow back on take-off (0.25 s)**, springy antennae and abdomen;
 4. **bakes clips** (idle, walk, run, hover, takeoff, land, attack = a bite, sting) into a new `.glb`, with a report and preview GIFs.
 
-Only the `insect` body plan exists today (six-legged, winged creatures and their relatives). Bipeds (humans) and
-quadrupeds are planned: the skinning, driver, springs, IK and baking are already plan-independent.
+Two ways in:
+
+- **A model that is already rigged the Kenshi way** (Kenshi's humans of every race, its animals, anything exported with
+  the same `Bip01 ...` bone names) **keeps its own skeleton and skin**. The Motion Lab recognises legs, arms, tail, ears
+  and jaw by their names and adds the motion: people get idle, walk and run (arms swing); four-legged animals get idle,
+  walk, run (a trot) and a bite.
+- **A model with no rig, or a rig it does not know** (a Meshy export), is **auto-rigged** from its shape. Today that
+  auto-rig knows insect-like bodies (legs, wings, antennae, abdomen); more body plans later.
+
+**Gaits measured from Kenshi.** The walk and run numbers (cycle length, stride, foot lift, how low the pelvis rides,
+how far the knee straightens and bends, arm swing, elbow) are measured from Kenshi's own walk / run animations for every
+skeleton that has them (`tools/build_gait_profiles.py`, table in `motionlab/data/kenshi_gaits.json`: numbers only, no
+animation data). A model on one of those skeletons moves by its own numbers; other people and animals use the median.
+`tools/measure_gait.py` prints the same numbers for Kenshi's clips and for ours side by side. For Kenshi's human walk
+ours now comes out at: knee 11-83 degrees (Kenshi 12-73), pelvis 0.93-0.97 m (0.92-0.97), arm swing -23 / +24 degrees
+(-21 / +24). Four-legged animals are close but not exact yet (the dog walks a little lower than Kenshi's).
 
 ## In Blender (the easy way)
 
@@ -58,6 +72,12 @@ python -m motionlab view out/my_creature/My_Creature_rigged.glb --clip walk -o w
 
 ```bash
 python -m motionlab info "My Creature.glb"
+```
+
+A Kenshi model straight from the game files (rig kept; `--own-rig no` forces the auto-rig):
+
+```bash
+python -m motionlab rig "<Kenshi>/data/character/meshes/human/human_male.mesh" --skeleton "<Kenshi>/data/character/meshes/male_skeleton/male_skeleton.skeleton" -o out/human --gifs
 ```
 
 Options for `rig`: `--ground-wings hidden|folded` (default hidden: wings vanish on the ground),
@@ -140,12 +160,13 @@ blender -b --factory-startup --python tools/blender_check.py -- out/my_creature/
 - **Not tried in Kenshi yet.** The clips are checked in Blender and by our own tests; the trip through Kenshi IO into
   the game is next.
 - Whether Kenshi plays bone *scale* keys (the wing shrink) is unknown: `--ground-wings folded` is the fallback.
-- One body plan (`insect`); see *Limits*.
+- People and four-legged animals: idle, walk, run (and a bite for animals) only, no combat or other actions yet.
 
 ## Limits
 
-- One body plan (`insect`). On Kenshi's crab it finds the four walking legs but takes the claws for wings and
-  antennae: fix with landmark edits until a `crab` / `quadruped` / `biped` plan exists.
+- The auto-rig (for models without a known rig) knows one body plan, `insect`. Kenshi's own crab, run through the
+  auto-rig, gets its four walking legs but its claws are taken for wings and antennae; with its own Bip01 rig kept (the
+  default) it walks as a four-legged body.
 - One mesh per file is read (the first skinned one, else the first mesh).
 - Rendering is a small software renderer (numpy): fine for checking motion, not a beauty render.
 
@@ -157,6 +178,10 @@ python tests/test_pipeline.py
 
 ```bash
 python tests/test_no_pillow.py
+```
+
+```bash
+python tests/test_own_rig.py
 ```
 
 ```bash

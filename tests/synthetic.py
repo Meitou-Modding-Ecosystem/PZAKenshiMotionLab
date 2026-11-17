@@ -79,3 +79,43 @@ def make_hexapod(yaw_deg=0.0):
     m.normals = n / np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-12)
     m.uvs = np.zeros((len(V), 2)); m.parts = [{'material': None, 'tri_start': 0, 'tri_count': len(T)}]
     return m
+
+
+def make_biped():
+    """A stick person rigged like Kenshi's characters (3ds Max Biped names, Bip01 ...): tube per bone, skinned rigidly."""
+    from motionlab.model import Skeleton
+    J = {  # name: (parent, world position)
+        'Bip01': (None, (0, 1.0, 0)), 'Bip01 Pelvis': ('Bip01', (0, 1.0, 0)),
+        'Bip01 L Thigh': ('Bip01 Pelvis', (0.1, 1.0, 0)), 'Bip01 L Calf': ('Bip01 L Thigh', (0.1, 0.55, 0.01)),
+        'Bip01 L Foot': ('Bip01 L Calf', (0.1, 0.09, 0)), 'Bip01 L Toe0': ('Bip01 L Foot', (0.1, 0.02, 0.15)),
+        'Bip01 R Thigh': ('Bip01 Pelvis', (-0.1, 1.0, 0)), 'Bip01 R Calf': ('Bip01 R Thigh', (-0.1, 0.55, 0.01)),
+        'Bip01 R Foot': ('Bip01 R Calf', (-0.1, 0.09, 0)), 'Bip01 R Toe0': ('Bip01 R Foot', (-0.1, 0.02, 0.15)),
+        'Bip01 Spine': ('Bip01 Pelvis', (0, 1.05, 0)), 'Bip01 Spine1': ('Bip01 Spine', (0, 1.25, 0)),
+        'Bip01 Spine2': ('Bip01 Spine1', (0, 1.4, 0)), 'Bip01 Neck': ('Bip01 Spine2', (0, 1.55, 0)),
+        'Bip01 Head': ('Bip01 Neck', (0, 1.65, 0.02)),
+        'Bip01 L Clavicle': ('Bip01 Spine2', (0.05, 1.5, 0)), 'Bip01 L UpperArm': ('Bip01 L Clavicle', (0.18, 1.5, 0)),
+        'Bip01 L Forearm': ('Bip01 L UpperArm', (0.2, 1.2, 0)), 'Bip01 L Hand': ('Bip01 L Forearm', (0.21, 0.92, 0.02)),
+        'Bip01 R Clavicle': ('Bip01 Spine2', (-0.05, 1.5, 0)), 'Bip01 R UpperArm': ('Bip01 R Clavicle', (-0.18, 1.5, 0)),
+        'Bip01 R Forearm': ('Bip01 R UpperArm', (-0.2, 1.2, 0)), 'Bip01 R Hand': ('Bip01 R Forearm', (-0.21, 0.92, 0.02)),
+    }
+    sk = Skeleton(); idx = {}
+    for nm, (par, p) in J.items():
+        idx[nm] = sk.add(nm, idx[par] if par else -1, np.array(p, float))
+    ends = {'Bip01 L Toe0': (0.1, 0.02, 0.24), 'Bip01 R Toe0': (-0.1, 0.02, 0.24), 'Bip01 Head': (0, 1.85, 0.02),
+            'Bip01 L Hand': (0.21, 0.8, 0.03), 'Bip01 R Hand': (-0.21, 0.8, 0.03)}
+    V, T, Jn = [], [], []; base = 0
+    for nm, (par, p) in J.items():
+        kids = [k for k, (pp, _) in J.items() if pp == nm]
+        tail = J[kids[0]][1] if len(kids) == 1 else ends.get(nm)
+        if tail is None or np.linalg.norm(np.subtract(tail, p)) < 1e-3: continue
+        v, t = _tube([np.array(p, float), np.array(tail, float)], 0.05 if 'Spine' in nm or nm == 'Bip01 Pelvis' else 0.035, sub=3)
+        V.append(v); T.append(t + base); Jn += [idx[nm]] * len(v); base += len(v)
+    m = Model(); m.name = 'test_biped'
+    m.verts = np.concatenate(V); m.tris = np.concatenate(T)
+    n = np.zeros_like(m.verts); fn = np.cross(m.verts[m.tris[:, 1]] - m.verts[m.tris[:, 0]], m.verts[m.tris[:, 2]] - m.verts[m.tris[:, 0]])
+    for k in range(3): np.add.at(n, m.tris[:, k], fn)
+    m.normals = n / np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-12)
+    m.uvs = np.zeros((len(m.verts), 2)); m.parts = [{'material': None, 'tri_start': 0, 'tri_count': len(m.tris)}]
+    m.skeleton = sk; m.joints = np.array(Jn)[:, None].repeat(4, 1) * 0 + np.array(Jn)[:, None]
+    m.weights = np.zeros((len(m.verts), 4)); m.weights[:, 0] = 1.0
+    return m

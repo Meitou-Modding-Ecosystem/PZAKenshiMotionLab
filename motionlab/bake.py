@@ -63,8 +63,8 @@ def gif_from_clip(model, sk, clip_nodes, length, path, fps=30, speed=0.0, cam=No
     from PIL import ImageDraw
     from . import render
     lo, hi = model.bounds()
-    centre = np.array([0, 0.45 * (hi[1] - lo[1]), 0])
-    cam = cam or render.Camera(centre, yaw, pitch, 1.45 * float(np.linalg.norm(hi - lo)), size=(480, 360))
+    centre = np.array([0, 0.5 * (hi[1] - lo[1]), 0])
+    cam = cam or render.Camera(centre, yaw, pitch, max(1.45 * float(np.linalg.norm(hi - lo)), 2.3 * float(hi[1] - lo[1])), size=(480, 360))
     R = render.Renderer(model, cam)
     # follow the body up (hover / takeoff): aim at the highest root height the clip reaches, half way
     r0 = sk.parents.index(-1)

@@ -42,6 +42,9 @@ class MotionLabSettings(bpy.types.PropertyGroup):
     antenna_bones: IntProperty(name='Antenna bones', default=2, min=1, max=4)
     abdomen_bones: IntProperty(name='Abdomen bones', default=3, min=1, max=5)
     fps: IntProperty(name='Frames per second', default=30, min=10, max=60)
+    own_rig: EnumProperty(name='Rig', items=[
+        ('auto', 'Keep its own rig if known', "Kenshi's Bip01 rigs (humans, animals) and Motion Lab rigs keep their skeleton and skin; others are auto-rigged"),
+        ('no', 'Always auto-rig', 'Build a new skeleton from the mesh shape even if it has one')], default='auto')
     show_options: BoolProperty(name='Options', default=False)
     last_report: StringProperty(default='')
 
@@ -58,12 +61,22 @@ def _out_dir(s):
     return d
 
 
-def _export_selected(obj, path):
-    """Write the chosen mesh (as it stands, materials included) to a .glb the rig pipeline reads."""
+def _rig_of(obj):
+    if obj.parent is not None and obj.parent.type == 'ARMATURE': return obj.parent
+    for md in obj.modifiers:
+        if md.type == 'ARMATURE' and md.object is not None: return md.object
+    return None
+
+
+def _export_selected(obj, path, with_rig=True):
+    """Write the chosen mesh (as it stands, materials included) to a .glb the rig pipeline reads. With its armature
+    when it has one, so a rig the Motion Lab knows (Kenshi's Bip01 bones from Kenshi IO, a Motion Lab rig) is kept."""
     for o in bpy.context.selected_objects: o.select_set(False)
     obj.select_set(True); bpy.context.view_layer.objects.active = obj
+    arm = _rig_of(obj) if with_rig else None
+    if arm is not None: arm.select_set(True)
     bpy.ops.export_scene.gltf(filepath=path, export_format='GLB', use_selection=True, export_animations=False,
-                              export_yup=True, export_apply=False)
+                              export_yup=True, export_apply=False, export_skins=arm is not None)
 
 
 def _import_result(glb, name):
@@ -109,11 +122,13 @@ def _run(context, src_glb, name, landmarks=None):
     log = []
     r = _ml().rig_file(src_glb, _out_dir(s), log=log.append, name=name, landmarks=landmarks, leg_bones=s.leg_bones,
                        wing_bones=s.wing_bones, antenna_bones=s.antenna_bones, abdomen_bones=s.abdomen_bones,
-                       ground_wings=s.ground_wings, clips=','.join(clips), fps=s.fps, gifs=False, png=False)
+                       ground_wings=s.ground_wings, clips=','.join(clips), fps=s.fps, gifs=False, png=False,
+                       own_rig=s.own_rig)
     context.scene.render.fps = s.fps; context.scene.render.fps_base = 1.0   # keys land on the clip's own frames
     arm, new, col = _import_result(r['glb'], r['name'])
     if arm is None: raise RuntimeError('the rigged file has no armature')
-    arm['motionlab_landmarks'] = r['landmarks']; arm['motionlab_source'] = src_glb
+    arm['motionlab_landmarks'] = r['landmarks'] or ''; arm['motionlab_source'] = src_glb
+    arm['motionlab_plan'] = r.get('plan') or ''
     arm['motionlab_clips'] = json.dumps(r['clips']); arm['motionlab_report'] = r['report']
     txt = bpy.data.texts.get(r['name'] + ' report') or bpy.data.texts.new(r['name'] + ' report')
     txt.clear(); txt.write(r['report_text'] + '\n\nLog:\n' + '\n'.join(log) + '\n')
@@ -158,7 +173,7 @@ class MOTIONLAB_OT_rig(bpy.types.Operator):
         name = bpy.path.clean_name(obj.name)
         src = os.path.join(_out_dir(context.scene.motion_lab), name + '_source.glb')
         try:
-            _export_selected(obj, src)
+            _export_selected(obj, src, with_rig=context.scene.motion_lab.own_rig != 'no')
             r, arm, new = _run(context, src, name)
         except Exception as ex:
             self.report({'ERROR'}, 'Motion Lab: %s' % ex); return {'CANCELLED'}
@@ -201,6 +216,9 @@ class MOTIONLAB_OT_markers(bpy.types.Operator):
     def execute(self, context):
         arm = _active_armature(context)
         if arm is None: self.report({'ERROR'}, 'rig a model first'); return {'CANCELLED'}
+        if not arm.get('motionlab_landmarks'):
+            self.report({'INFO'}, 'This model kept its own rig (%s): limb markers are for auto-rigged models' % arm.get('motionlab_plan', ''))
+            return {'CANCELLED'}
         lm = json.load(open(arm['motionlab_landmarks'], encoding='utf-8'))
         col = bpy.data.collections.get(MARKERS) or bpy.data.collections.new(MARKERS)
         if col.name not in context.scene.collection.children: context.scene.collection.children.link(col)
@@ -294,7 +312,7 @@ class MOTIONLAB_PT_panel(bpy.types.Panel):
         box.operator('motionlab.rig', icon='PLAY')
         box.prop(s, 'show_options', icon='TRIA_DOWN' if s.show_options else 'TRIA_RIGHT')
         if s.show_options:
-            box.prop(s, 'ground_wings'); box.prop(s, 'out_dir')
+            box.prop(s, 'own_rig'); box.prop(s, 'ground_wings'); box.prop(s, 'out_dir')
             r = box.row(align=True); r.prop(s, 'leg_bones'); r.prop(s, 'wing_bones')
             r = box.row(align=True); r.prop(s, 'antenna_bones'); r.prop(s, 'abdomen_bones')
             box.prop(s, 'fps')

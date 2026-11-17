@@ -59,6 +59,7 @@ class Options:
         self.skeleton = None; self.name = None; self.plan = 'insect'; self.landmarks = None
         self.leg_bones = 4; self.wing_bones = 2; self.antenna_bones = 2; self.abdomen_bones = 3
         self.ground_wings = 'hidden'; self.clips = None; self.fps = 30; self.gifs = False; self.png = True
+        self.own_rig = 'auto'      # 'auto': keep a skeleton we recognise (Kenshi Bip01, Motion Lab names); 'yes' / 'no'
         for k, v in kw.items(): setattr(self, k, v)
 
 
@@ -70,6 +71,41 @@ def have_pillow():
         return False
 
 
+def _rig_lm(model, rigmap, drv):
+    """Limb lines of an own rig, in the landmarks shape the picture code draws."""
+    r = drv.rig; W = r.Wrest
+    def pts(bones): return r.chain_points([r.b(b) for b in bones], W).tolist()
+    sp = [W[r.b(rigmap['body'])][:3, 3].tolist(), W[r.b(rigmap['head'])][:3, 3].tolist()]
+    return {'legs': [{'name': e['name'], 'points': pts(e['bones'])} for e in rigmap['legs']] +
+                    [{'name': e['name'], 'points': pts(e['bones'])} for e in rigmap.get('arms', [])],
+            'wings': [{'name': e['name'], 'points': pts(e['bones'])} for e in rigmap['wings']],
+            'antennae': [{'name': e['name'], 'points': pts(e['bones'])} for e in rigmap['antennae']],
+            'spine': sp + (pts(rigmap['spine']) if rigmap['spine'] else [])}
+
+
+def _own_report(model, sk, rigmap, st, source):
+    from .rigbuild import KENSHI_MAX_BONES_PER_SUBMESH as MB, KENSHI_UNITS_PER_METRE as U
+    lo, hi = model.bounds(); H = float(hi[1] - lo[1])
+    L = ["# PZA's Kenshi Motion Lab: report for '%s' (its own rig)" % model.name, '', 'Source: %s' % source, '',
+         '| Check | Value | Kenshi | OK |', '|---|---|---|---|',
+         '| Rig | %s bones, %s body (kept as it is) | - | - |' % (rigmap.get('source_rig', '?'), rigmap.get('plan', '?')),
+         '| Bones in the skeleton | %d | %d per submesh | %s |' % (len(sk), MB, 'yes' if len(sk) <= MB else 'check per submesh'),
+         '| Weights per vertex | up to %d | 3 | %s |' % (st['weights_per_vertex_max'], 'yes' if st['weights_per_vertex_max'] <= 3 else 'NO'),
+         '| Vertices without weights | %d | 0 | %s |' % (st['unweighted'], 'yes' if st['unweighted'] == 0 else 'check'),
+         '| Height | %.2f m | x%d in Kenshi units: %.1f | - |' % (H, U, H * U),
+         '| Gait numbers | %s | - | - |' % ("measured from Kenshi's own walk / run clips: " + rigmap['gait_profile_from']
+                                           if rigmap.get('gait_profile_from') else 'built-in defaults'),
+         '', '## Bones the motion drives',
+         '| Role | Bones |', '|---|---|']
+    for e in rigmap['legs']: L.append('| %s | %s (foot kept level: %s) |' % (e['name'], ', '.join(e['bones']), e.get('foot', '-')))
+    for e in rigmap.get('arms', []): L.append('| %s | %s (swing) |' % (e['name'], ', '.join(e['bones'])))
+    if rigmap['spine']: L.append('| tail (springs) | %s |' % ', '.join(rigmap['spine']))
+    for e in rigmap['antennae']: L.append('| %s (springs%s) | %s |' % (e['name'], ', stiff' if e.get('stiff') else '', ', '.join(e['bones'])))
+    if rigmap.get('jaw'): L.append('| jaw (opens in the bite) | %s |' % rigmap['jaw'])
+    L.append('| body / head / root | %s / %s / %s |' % (rigmap['body'], rigmap['head'], rigmap['root']))
+    return chr(10).join(L) + chr(10)
+
+
 def rig_file(model_path, out_dir, log=print, **kw):
     """Auto-rig a model file, bake the clips, write <name>_rigged.glb + report + landmarks + motion map (+ PNG, GIFs
     when Pillow is there). Returns a dict of the written paths and the run's numbers."""
@@ -78,18 +114,34 @@ def rig_file(model_path, out_dir, log=print, **kw):
     t0 = time.time()
     os.makedirs(a.out, exist_ok=True)
     src = _load(a.model, a.skeleton)
-    log('loaded %s: %d vertices, %d triangles%s' % (os.path.basename(a.model), len(src.verts), len(src.tris),
-        ', own skeleton %d bones (replaced)' % len(src.skeleton) if src.skeleton is not None else ''))
-    model, lm = autorig.analyse(src, plan=a.plan, legs_bones=a.leg_bones, log=log)
-    if a.landmarks:
-        ed = a.landmarks if isinstance(a.landmarks, dict) else json.load(open(a.landmarks, encoding='utf-8'))
-        _apply_edits(lm, ed, log)
+    from . import existing
+    own = existing.rigmap_from_skeleton(src) if (a.own_rig != 'no' and not a.landmarks) else None
+    if a.own_rig == 'yes' and own is None:
+        raise ValueError('the model has no skeleton the Motion Lab recognises (Kenshi Bip01 or Motion Lab names)')
+    if src.skeleton is None: what = ''
+    elif own: what = ', own skeleton %d bones (kept: %s, %s)' % (len(src.skeleton), own['source_rig'], own['plan'])
+    else: what = ', own skeleton %d bones (not one we recognise: replaced)' % len(src.skeleton)
+    log('loaded %s: %d vertices, %d triangles%s' % (os.path.basename(a.model), len(src.verts), len(src.tris), what))
     name = a.name or os.path.splitext(os.path.basename(a.model))[0].replace(' ', '_')
+    if own:
+        # the model's own rig: skeleton and skin stay exactly as they are, only motion is added
+        model, rigmap, lm = src, own, None
+        sk, J, Wk = src.skeleton, src.joints, src.weights
+        nz = (Wk > 1e-6).sum(1)
+        st = {'vertices': len(src.verts), 'max_weight_dropped_by_prune': 0.0, 'unweighted': int((nz == 0).sum()),
+              'weights_per_vertex_max': int(nz.max())}
+        log('own rig: %d legs, %d arms, %d spring chains, tail %d bones, jaw %s' % (len(own['legs']), len(own['arms']),
+            len(own['antennae']), len(own['spine']), 'yes' if own.get('jaw') else 'no'))
+    else:
+        model, lm = autorig.analyse(src, plan=a.plan, legs_bones=a.leg_bones, log=log)
+        if a.landmarks:
+            ed = a.landmarks if isinstance(a.landmarks, dict) else json.load(open(a.landmarks, encoding='utf-8'))
+            _apply_edits(lm, ed, log)
+        sk, rigmap = rigbuild.build_skeleton(lm, leg_bones=a.leg_bones, wing_bones=a.wing_bones,
+                                             antenna_bones=a.antenna_bones, abdomen_bones=a.abdomen_bones, log=log)
+        J, Wk, st = rigbuild.bind(model, sk, rigmap, lm, shape.Surface(model), log=log)
+        model.skeleton, model.joints, model.weights = sk, J, Wk
     model.name = name
-    sk, rigmap = rigbuild.build_skeleton(lm, leg_bones=a.leg_bones, wing_bones=a.wing_bones,
-                                         antenna_bones=a.antenna_bones, abdomen_bones=a.abdomen_bones, log=log)
-    J, Wk, st = rigbuild.bind(model, sk, rigmap, lm, shape.Surface(model), log=log)
-    model.skeleton, model.joints, model.weights = sk, J, Wk
     rig = motion.Rig(sk, rigmap); drv = motion.Driver(rig, ground_wings=a.ground_wings)
     defs = motion.standard_clips(drv, ground_wings=a.ground_wings)
     if a.clips:
@@ -107,16 +159,19 @@ def rig_file(model_path, out_dir, log=print, **kw):
     back = gltf.load_glb(glb)
     rest_err = float(np.abs(back.verts - model.verts).max())
     lmj = os.path.join(a.out, name + '.landmarks.json')
-    json.dump(autorig.public(lm), open(lmj, 'w', encoding='utf-8'), indent=1)
+    if lm is not None: json.dump(autorig.public(lm), open(lmj, 'w', encoding='utf-8'), indent=1)
+    else: lmj = None
+    draw = lm if lm is not None else _rig_lm(model, rigmap, drv)
     rmj = os.path.join(a.out, name + '.motion.json')
     json.dump({'name': name, 'tool': "PZA's Kenshi Motion Lab", 'version': autorig.VERSION, **rigmap,
                'clips': [{'name': c.name, 'length_s': float(c.times[-1]), 'loop': c.loop, 'ground_speed_m_s': c.speed,
                           'note': c.note} for c in clips], 'crouch_m': drv.crouch, 'ground_wings': a.ground_wings},
               open(rmj, 'w', encoding='utf-8'), indent=1)
     png = os.path.join(a.out, name + '_landmarks.png')
-    if a.png and have_pillow(): _landmark_png(model, lm, png)
+    if a.png and have_pillow(): _landmark_png(model, draw, png)
     else: png = None
-    rep = rigbuild.report(model, sk, rigmap, J, Wk, st, lm, source_info=os.path.basename(a.model))
+    if lm is not None: rep = rigbuild.report(model, sk, rigmap, J, Wk, st, lm, source_info=os.path.basename(a.model))
+    else: rep = _own_report(model, sk, rigmap, st, os.path.basename(a.model))
     rep += '\n## Clips (baked at %d fps, in place: the game moves the creature)\n' % a.fps
     rep += '| Clip | Length | Loop | Ground speed | Worst foot IK miss | Worst planted-foot slip | Note |\n|---|---|---|---|---|---|---|\n'
     for c in clips:
@@ -126,7 +181,7 @@ def rig_file(model_path, out_dir, log=print, **kw):
             c.name, c.times[-1], 'yes' if c.loop else 'no', c.speed, c.speed * 10, miss, slip, c.note)
     rep += '\nWalking crouch: the body is lowered %.2f m while walking so the legs have room for a stride.\n' % drv.crouch
     rep += 'Round trip: the written .glb read back, rest pose max vertex difference %.2e m; %d clips found in the file.\n' % (rest_err, len(rc))
-    rep += ('\nWings on the ground: %s (wings shrink away on landing and grow back on take-off, 0.25 s, by '
+    if drv.wings: rep += ('\nWings on the ground: %s (wings shrink away on landing and grow back on take-off, 0.25 s, by '
             'scaling the wing root bones). Whether Kenshi plays bone SCALE keys is not verified yet; fallback: fold them.\n') % a.ground_wings
     rpt = os.path.join(a.out, name + '_report.md')
     open(rpt, 'w', encoding='utf-8').write(rep)
@@ -139,6 +194,6 @@ def rig_file(model_path, out_dir, log=print, **kw):
             log('gif %s' % p); gifs.append(p)
     log('done in %.1f s' % (time.time() - t0))
     return {'name': name, 'glb': glb, 'report': rpt, 'report_text': rep, 'landmarks': lmj, 'motion': rmj, 'png': png,
-            'gifs': gifs, 'frame': lm.get('frame', {}), 'bones': len(sk), 'clips': [c.name for c in clips]}
+            'gifs': gifs, 'frame': (lm or {}).get('frame', {}), 'own_rig': lm is None, 'plan': rigmap.get('plan'), 'bones': len(sk), 'clips': [c.name for c in clips]}
 
 

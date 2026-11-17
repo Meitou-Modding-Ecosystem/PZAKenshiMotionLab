@@ -18,7 +18,7 @@ def foot_check(drv, cd, fps=30):
         if k >= n or not cd.loop:
             for e, ch in drv.legs:
                 nm = e['name']; tg = feet.get(nm)
-                if tg is not None and spec.get('fold', 0) <= 0:
+                if tg is not None and spec.get("fold", 0) <= 0 and nm in st:   # planted feet only (swing targets may be capped)
                     miss[nm] = max(miss.get(nm, 0.0), float(np.linalg.norm(cur[nm] - tg)))
                 if prev is not None and nm in st and nm in prev[1]:
                     v = (cur[nm] - prev[0][nm]) * fps + np.array([0, 0, cd.speed])

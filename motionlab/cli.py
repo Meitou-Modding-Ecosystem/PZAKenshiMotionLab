@@ -14,7 +14,7 @@ def _load(path, skeleton=None):
 def cmd_rig(a):
     from .pipeline import rig_file
     kw = {k: getattr(a, k) for k in ('skeleton', 'name', 'plan', 'landmarks', 'leg_bones', 'wing_bones', 'antenna_bones',
-                                     'abdomen_bones', 'ground_wings', 'clips', 'fps', 'gifs')}
+                                     'abdomen_bones', 'ground_wings', 'clips', 'fps', 'gifs', 'own_rig')}
     rig_file(a.model, a.out, **kw)
 
 
@@ -57,6 +57,8 @@ def main(argv=None):
     r.add_argument('--ground-wings', default='hidden', choices=['hidden', 'folded'])
     r.add_argument('--clips', help='comma list (default all: idle,walk,run,hover,takeoff,land,attack,sting)')
     r.add_argument('--fps', type=int, default=30); r.add_argument('--gifs', action='store_true')
+    r.add_argument('--own-rig', dest='own_rig', default='auto', choices=['auto', 'yes', 'no'],
+                   help='keep the model own skeleton when it is one we know (Kenshi Bip01, Motion Lab names); default auto')
     v = sub.add_parser('view', help='render a clip of a rigged .glb to a GIF')
     v.add_argument('model'); v.add_argument('-o', '--out', required=True); v.add_argument('--clip')
     v.add_argument('--fps', type=int, default=30); v.add_argument('--bones', action='store_true')

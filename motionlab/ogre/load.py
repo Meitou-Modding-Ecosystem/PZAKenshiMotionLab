@@ -58,9 +58,9 @@ def load_mesh(path, skeleton_path=None, units_per_metre=KENSHI_UNITS_PER_METRE):
         hidx = {h: i for i, h in enumerate(handles)}
         sk = Skeleton()
         for h in handles:
-            name, pos, qwxyz, sc = bones[h]
+            name, pos, qxyzw, sc = bones[h]          # Ogre files store quaternions x, y, z, w (as LEAF SkeletonFile.h notes)
             sk.names.append(name); sk.parents.append(hidx[parents[h]] if h in parents else -1)
-            sk.rest_t.append(np.array(pos, float) * k); sk.rest_q.append(mx.q_from_wxyz(qwxyz)); sk.rest_s.append(np.array(sc, float))
+            sk.rest_t.append(np.array(pos, float) * k); sk.rest_q.append(mx.norm(np.array(qxyzw, float))); sk.rest_s.append(np.array(sc, float))
         nv = len(mo.verts)
         J = np.zeros((nv, 4), np.int64); Wt = np.zeros((nv, 4))
         cnt = np.zeros(nv, int)
@@ -70,4 +70,5 @@ def load_mesh(path, skeleton_path=None, units_per_metre=KENSHI_UNITS_PER_METRE):
         s_ = Wt.sum(1, keepdims=True); Wt = np.where(s_ > 0, Wt / np.maximum(s_, 1e-12), 0)
         mo.skeleton, mo.joints, mo.weights = sk, J, Wt
         mo.ogre_animations = [a[0] for a in anims]
+        mo.skeleton_file = sp
     return mo

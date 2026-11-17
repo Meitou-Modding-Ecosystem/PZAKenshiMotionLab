@@ -73,6 +73,17 @@ class Rig:
             for c in self._desc(b):
                 pc = self.parents[c]; W[c] = W[pc] @ mx.trs(t[c], q[c], s[c])
 
+    def set_world_rot(self, b, qw, q, t, s, W):
+        p = self.parents[b]
+        if p >= 0:
+            R = W[p][:3, :3] / np.linalg.norm(W[p][:3, :3], axis=0); qp = mx.m3_to_q(R); Wp = W[p]
+        else:
+            qp = mx.q_identity(); Wp = np.eye(4)
+        q[b] = mx.norm(mx.q_mul(mx.q_conj(qp), qw))
+        W[b] = Wp @ mx.trs(t[b], q[b], s[b])
+        for c in self._desc(b):
+            W[c] = W[self.parents[c]] @ mx.trs(t[c], q[c], s[c])
+
     def _desc(self, b):
         out = []; stack = list(self.sk.children(b))
         while stack:
@@ -92,7 +103,7 @@ def _rotate_about(points, pivot, qrot):
     return (np.asarray(points) - pivot) @ R.T + pivot
 
 
-def leg_ik(pts, target, up=np.array([0.0, 1.0, 0.0]), knee=None):
+def leg_ik(pts, target, up=np.array([0.0, 1.0, 0.0]), knee=None, bend=None):
     """Leg IK the way legs move: the whole leg swings at the hip (about the body's up axis) to face the target,
     then an upper part (hip..knee) and a lower part (knee..foot), each kept rigid, bend at the knee in the leg's own
     plane (the knee keeps the side it bends to at rest). Bones keep their lengths; the knee visibly works and the foot
@@ -104,7 +115,8 @@ def leg_ik(pts, target, up=np.array([0.0, 1.0, 0.0]), knee=None):
     # 1. hip swing: turn the leg about the vertical through the hip so the foot faces the target
     def flat(v): return v - up * (v @ up)
     a0, a1 = flat(pts[-1] - hip), flat(target - hip)
-    if np.linalg.norm(a0) > 1e-6 and np.linalg.norm(a1) > 1e-6:
+    Ltot = np.linalg.norm(pts[-1] - hip) + 1e-9
+    if np.linalg.norm(a0) > 0.15 * Ltot and np.linalg.norm(a1) > 0.15 * Ltot:     # splayed legs (insects, crabs) turn at the hip
         pts = _rotate_about(pts, hip, mx.q_between(a0, a1))
     # 2. knee: two rigid parts, law of cosines in the plane of hip, knee and target
     La = np.linalg.norm(pts[k] - hip); Lb = np.linalg.norm(pts[-1] - pts[k])
@@ -113,6 +125,9 @@ def leg_ik(pts, target, up=np.array([0.0, 1.0, 0.0]), knee=None):
     d = np.clip(d, abs(La - Lb) + 1e-4, La + Lb - 1e-4)
     u = v / np.linalg.norm(v)
     side = (pts[k] - hip) - u * ((pts[k] - hip) @ u)
+    if bend is not None:                         # the leg's own bend direction (knee forward, elbow back): always
+        b = np.asarray(bend, float); sb = b - u * (b @ u)  # (the rest knee's side flips with the target on straight legs)
+        if np.linalg.norm(sb) > 1e-6: side = sb
     if np.linalg.norm(side) < 1e-6: side = up - u * (up @ u)
     nrm = side / np.linalg.norm(side)
     ca = np.clip((La * La + d * d - Lb * Lb) / (2 * La * d), -1, 1)
@@ -184,10 +199,19 @@ class Driver:
         self.wings = [(e, [r.b(x) for x in e['bones']]) for e in self.map['wings']]
         self.ants = [(e, [r.b(x) for x in e['bones']]) for e in self.map['antennae']]
         self.abd = [r.b(x) for x in self.map.get('spine', [])]
+        self.arms = [(e, [r.b(x) for x in e['bones']]) for e in self.map.get('arms', [])]
+        self.jaw = r.b(self.map['jaw']) if self.map.get('jaw') in r.idx else None
+        self.plan = self.map.get('plan', 'insect')
+        prof = self.map.get('gait_profile') or {}
+        km = [prof[k]['knee_deg'][1] for k in ('walk', 'run') if k in prof]
+        self.knee_max = (max(km) + 5.0) if km else None        # never fold a knee further than the clips do
         Wr = r.Wrest
         self.rest_tip = {e['name']: np.array(e['tip']) for e, _ in self.legs}
         reach = [np.linalg.norm((self.rest_tip[e['name']] - Wr[c[0]][:3, 3])[[0, 2]]) for e, c in self.legs] or [0.5]
         self.reach = float(np.median(reach))
+        lens = [np.linalg.norm(np.diff(r.chain_points(c, Wr), axis=0), axis=1).sum() for e, c in self.legs] or [1.0]
+        self.leg_len = float(np.median(lens))
+        if self.reach < 0.3 * self.leg_len: self.reach = 0.6 * self.leg_len      # upright legs (feet under the hips)
         # the longest stride every planted leg can take (stance speed must be the same for all legs or feet slide);
         # straight-legged rigs need the body lowered a little while walking to get a stride at all
         self._Wr = Wr
@@ -227,6 +251,21 @@ class Driver:
                     lim.append(lo_)
             return 2.0 * min(lim) if lim else 0.5
 
+    def vault(self, feet, slack=0.985):
+        """Highest root offset at which every planted foot is still within reach of its hip: the inverted-pendulum
+        vault of a walk (hips rise over a straight stance leg, drop at double support). None when no foot is down."""
+        st = feet.get('_stance', set()); best = None
+        for e, ch in self.legs:
+            if e['name'] not in st: continue
+            P0 = self.rig.chain_points(ch, self._Wr); kk = (len(ch) + 1) // 2
+            L = slack * (np.linalg.norm(P0[kk] - P0[0]) + np.linalg.norm(P0[-1] - P0[kk]))
+            hip = P0[0]; f = np.asarray(feet[e['name']])
+            dh = (f - hip)[[0, 2]]; h2 = L * L - float(dh @ dh)
+            if h2 <= 0: continue
+            off = (f[1] + np.sqrt(h2)) - hip[1]
+            best = off if best is None else min(best, off)
+        return best
+
     def reset(self):
         self.springs = {}
 
@@ -244,6 +283,15 @@ class Driver:
         if 'body_rot' in spec: q[body] = r.local_from_world_delta(body, spec['body_rot'])
         if 'body_offset' in spec: t[body] = r.rest_t[body] + spec['body_offset']
         if 'head_rot' in spec: q[head] = r.local_from_world_delta(head, spec['head_rot'])
+        if self.jaw is not None and spec.get('jaw_open'):
+            q[self.jaw] = r.local_from_world_delta(self.jaw, mx.q_axis_angle([1, 0, 0], np.radians(spec['jaw_open'])))
+        for e, ch in self.arms:                                   # arms swing about the shoulder's side axis
+            a = spec.get('arm_swing', {}).get(e['side'], 0.0)
+            q[ch[0]] = r.local_from_world_delta(ch[0], mx.q_axis_angle([1, 0, 0], np.radians(a)))
+            if len(ch) > 1:
+                fb = spec.get('forearm_bend', 0.0)
+                if isinstance(fb, dict): fb = fb.get(e['side'], 0.0)
+                q[ch[1]] = r.local_from_world_delta(ch[1], mx.q_axis_angle([1, 0, 0], np.radians(-fb)))
         for k, b in enumerate(self.abd):
             if 'abdomen_rot' in spec and k < len(spec['abdomen_rot']):
                 q[b] = r.local_from_world_delta(b, spec['abdomen_rot'][k])
@@ -263,7 +311,8 @@ class Driver:
         W = r.fk(q, t, s)
         # springs: antennae and abdomen follow their procedural pose with lag
         dtt = spec.get('dt', dt)
-        for key, ch, kc, extra in [('ant_' + e['name'], c, self.sa, spec.get('antenna_twitch')) for e, c in self.ants] + \
+        for key, ch, kc, extra in [('ant_' + e['name'], c, (600.0, 40.0) if e.get('stiff') else self.sa,
+                                    None if e.get('stiff') else spec.get('antenna_twitch')) for e, c in self.ants] + \
                                   ([('abdomen', self.abd, self.sb, None)] if self.abd else []):
             if extra is not None:
                 for k, b in enumerate(ch):
@@ -285,8 +334,19 @@ class Driver:
                 ft = hip + (tip - hip) * np.array([0.6, 0.75, 0.6]) + np.array([0, 0.05 * r.height, 0])
                 tgt = ft if tgt is None else (1 - fold) * np.asarray(tgt) + fold * ft
             lens = np.array([r.length[b] for b in ch])
-            pts = leg_ik(pts0, np.asarray(tgt, float), self.up)
+            tgt = np.asarray(tgt, float)
+            kmax = self.knee_max
+            if kmax is not None:
+                kk = (len(ch) + 1) // 2
+                La = np.linalg.norm(pts0[kk] - pts0[0]); Lb = np.linalg.norm(pts0[-1] - pts0[kk])
+                inner = np.radians(180.0 - kmax)               # the knee's inner angle at its most bent
+                dmin = np.sqrt(La * La + Lb * Lb - 2 * La * Lb * np.cos(inner))
+                v = tgt - pts0[0]; dv = np.linalg.norm(v)
+                if 1e-9 < dv < dmin: tgt = pts0[0] + v / dv * dmin
+            pts = leg_ik(pts0, tgt, self.up, bend=e.get('bend'))
             r.aim_chain(ch, pts, q, t, s, W)
+            if e.get('foot') in r.idx:                            # keep the foot / hoof at its rest angle (flat)
+                r.set_world_rot(r.b(e['foot']), r.qrest_w[r.b(e['foot'])], q, t, s, W)
         return q, t, s, W
 
 
@@ -297,7 +357,7 @@ class ClipDef:
         self.name, self.length, self.fn, self.loop, self.speed, self.note = name, length, fn, loop, speed, note
 
 
-def gait_feet(drv, phase, stride, lift, duty, ground=0.0):
+def gait_feet(drv, phase, stride, lift, duty, ground=0.0, centre=0.0):
     """Foot targets; feet['_stance'] lists the legs that are planted this frame (for the slip check)."""
     feet = {'_stance': set()}
     for e, ch in drv.legs:
@@ -308,7 +368,7 @@ def gait_feet(drv, phase, stride, lift, duty, ground=0.0):
             u = p / duty; off = stride * (0.5 - u); h = 0.0; feet['_stance'].add(e['name'])
         else:
             u = (p - duty) / (1 - duty); off = stride * (-0.5 + smoothstep(u)); h = lift * np.sin(np.pi * u)
-        feet[e['name']] = np.array([tip[0], ground + max(tip[1], 0.0) + h, tip[2] + off])
+        feet[e['name']] = np.array([tip[0], ground + max(tip[1], 0.0) + h, tip[2] + centre + off])
     return feet
 
 
@@ -323,21 +383,48 @@ def standard_clips(drv, ground_wings='hidden'):
 
     def idle(t, T):
         w = 2 * np.pi * t / T
-        return {'root_offset': (0, -drv.stand_crouch + 0.012 * H * np.sin(w), 0), 'body_rot': ax(X, 1.5 * np.sin(w)),
+        return {'arm_swing': {e['side']: 2.0 * np.sin(w + (0 if e['side'] == 'L' else 1.3)) for e, c in drv.arms}, 'forearm_bend': 8.0,
+                'root_offset': (0, -drv.stand_crouch + 0.012 * H * np.sin(w), 0), 'body_rot': ax(X, 1.5 * np.sin(w)),
                 'head_rot': mx.q_mul(ax(Y, 6 * np.sin(w * 2 + 0.7)), ax(X, 3 * np.sin(w))),
                 'abdomen_rot': [ax(X, 3 * np.sin(w + 0.8)), ax(X, 2 * np.sin(w + 1.2))],
                 'antenna_twitch': np.radians(8) * np.sin(w * 3),
                 'feet': gait_feet(drv, 0.0, 0.0, 0.0, 1.0), 'wings': gw}
 
-    def walker(stride, lift, duty, bob, pitch, lean_head, crouch):
+    def arm_swing(ph, amp):
+        """Each arm swings against the leg on its own side (forward while that foot is back)."""
+        out = {}
+        for e, ch in drv.arms:
+            same = [l for l, c in drv.legs if l['side'] == e['side']]
+            p0 = drv.phase[sorted(same, key=lambda l: l['name'])[0]['name']] if same else 0.0
+            out[e['side']] = amp * np.cos(2 * np.pi * (ph + p0))
+        return out
+
+    def walker(stride, lift, duty, bob, pitch, lean_head, crouch, arm_amp=0.0, fore=0.0, vault=False, air=0.0,
+               ymax=0.0, slack=0.985, arm_bias=0.0, fore_amp=0.0, centre=0.0, all_legs=False):
         def fn(t, T):
             ph = t / T
             w = 2 * np.pi * ph
-            return {'root_offset': (0, -crouch + bob * H * np.cos(2 * w), 0),
+            feet = gait_feet(drv, ph, stride, lift, duty, centre=centre)
+            if vault:                                   # people: hips ride over the stance leg, a hop when no foot is down
+                vf = feet
+                if all_legs:                            # the swinging leg reaching for its next step counts too
+                    vf = dict(feet); vf['_stance'] = {e['name'] for e, c in drv.legs if e['name'] in feet}
+                v = drv.vault(vf, slack)
+                if v is not None: y = min(v, ymax)
+                else:                                   # airborne: a small hop, never higher than the feet can follow
+                    allf = dict(feet); allf['_stance'] = {e['name'] for e, c in drv.legs if e['name'] in feet}
+                    va = drv.vault(allf)
+                    y = ymax + air * H * np.sin(np.pi * ((ph * 2) % 1.0))
+                    if va is not None: y = min(y, va)
+            else:
+                y = -crouch + bob * H * np.cos(2 * w)
+            sw = {k: v + arm_bias for k, v in arm_swing(ph, arm_amp).items()}
+            fb = {k: fore + fore_amp * (v - arm_bias) / max(arm_amp, 1e-6) for k, v in sw.items()}   # elbow bends more as the arm comes forward
+            return {'arm_swing': sw, 'forearm_bend': fb, 'root_offset': (0, y, 0),
                     'body_rot': mx.q_mul(ax(X, pitch), ax(Z, 2.0 * np.sin(w))),
                     'head_rot': ax(Y, lean_head * np.sin(w)),
                     'abdomen_rot': [ax(Y, 4 * np.sin(w - 0.6)), ax(X, 2 * np.cos(2 * w))],
-                    'feet': gait_feet(drv, ph, stride, lift, duty), 'wings': gw}
+                    'feet': feet, 'wings': gw}
         return fn
 
     def hover(t, T):
@@ -373,11 +460,14 @@ def standard_clips(drv, ground_wings='hidden'):
         # rear back with the head up, then lunge and snap the head down (mandibles first), feet stay planted
         wind = smoothstep(t / 0.30) * (1 - smoothstep((t - 0.30) / 0.10))
         snap = smoothstep((t - 0.30) / 0.10) * (1 - smoothstep((t - 0.55) / 0.40))
-        return {'root_offset': (0, -drv.stand_crouch - 0.6 * drv.crouch * snap, -0.03 * H * wind + 0.05 * H * snap),
-                'body_rot': ax(X, -6 * wind + 4 * snap),
+        lunge = min(0.05 * H, 0.35 * drv.stride_for(drv.stand_crouch + 0.6 * drv.crouch))   # only as far as the feet reach
+        back = min(0.03 * H, 0.35 * drv.stride_for(drv.stand_crouch))
+        return {'root_offset': (0, -drv.stand_crouch - 0.6 * drv.crouch * snap, -back * wind + lunge * snap),
+                'body_rot': ax(X, (-6 * wind + 4 * snap) * (0.0 if drv.plan == 'quadruped' else 1.0)),   # quadrupeds: front legs hang off the spine
                 'head_rot': ax(X, -24 * wind + 34 * snap),
                 'abdomen_rot': [ax(X, -6 * wind + 8 * snap), ax(X, 4 * snap)],
                 'antenna_twitch': np.radians(-18) * wind + np.radians(12) * snap,
+                'jaw_open': 28 * wind + 6 * snap,
                 'feet': gait_feet(drv, 0.0, 0.0, 0.0, 1.0), 'wings': gw}
 
     def sting(t, T):
@@ -400,17 +490,68 @@ def standard_clips(drv, ground_wings='hidden'):
                 del out[e['name']]; out['_stance'].discard(e['name'])
         return out
 
-    walk_T, walk_stride = 1.0, min(0.55 * reach, 0.8 * drv.max_stride)
-    run_T, run_stride = 0.6, min(0.9 * reach, 0.85 * drv.stride_for(drv.run_crouch))
-    return [
-        ClipDef('idle', 2.4, idle, True, 0.0, 'breathing, head and antennae look around, feet planted'),
-        ClipDef('walk', walk_T, walker(walk_stride, 0.10 * H, 0.55, 0.008, 2.0, 5, drv.crouch), True, walk_stride / (0.55 * walk_T),
-                'alternating gait, feet planted in stance'),
-        ClipDef('run', run_T, walker(run_stride, 0.12 * H, 0.45, 0.012, 7.0, 3, drv.run_crouch), True, run_stride / (0.45 * run_T),
-                'longer strides from a deeper crouch, body pitched forward'),
+    prof = drv.map.get('gait_profile')
+    if prof and drv.plan in ('biped', 'quadruped') and ('walk' in prof or 'run' in prof):
+        # numbers measured from Kenshi's own walk / run clips for this skeleton (or the median of its kind):
+        # cycle, stride, foot lift, pelvis height, straightest knee, arm swing and elbow (motionlab/profiles.py)
+        L = drv.leg_len
+        def from_prof(g, kind):
+            dmin, dmax = (0.45, 0.68) if kind == 'walk' else (0.3, 0.5)
+            T = float(g['cycle_s']); duty = float(np.clip(g['duty'], dmin, dmax))
+            ymax = -float(g['pelvis_drop'][0]) * L
+            # stance slack from the straightest knee in the clip, with this body's own thigh / shin lengths
+            km = np.radians(float(g['knee_deg'][0])); sl = []
+            for e, ch in drv.legs:
+                P = drv.rig.chain_points(ch, drv._Wr); kk = (len(ch) + 1) // 2
+                La, Lb = np.linalg.norm(P[kk] - P[0]), np.linalg.norm(P[-1] - P[kk])
+                sl.append(np.sqrt(La * La + Lb * Lb + 2 * La * Lb * np.cos(km)) / (La + Lb))
+            slack = float(np.clip(np.median(sl), 0.6, 0.995))
+            low = max(float(g['pelvis_drop'][1]), 0.03) * L          # the pelvis dips this low to reach the long steps
+            stride = min(float(g['stride']) * L, 0.95 * drv.stride_for(low))
+            lift = float(g['lift']) * L
+            pitch = 2.0 if kind == 'walk' else (9.0 if drv.plan == 'biped' else 4.0)
+            kw = dict(vault=True, ymax=ymax, slack=slack, centre=float(g.get('foot_centre', 0.0)) * L, all_legs=True)
+            if 'arm_deg' in g and drv.arms:
+                lo_, hi_ = g['arm_deg']; e0, e1 = g.get('elbow_deg', [10, 30])
+                kw.update(arm_amp=(hi_ - lo_) / 2, arm_bias=-(hi_ + lo_) / 2 - pitch, fore=(e0 + e1) / 2, fore_amp=(e1 - e0) / 2)
+            return T, duty, stride, walker(stride, lift, duty, 0.0, pitch, 2, 0.0, **kw)
+        walk_g = prof.get('walk') or prof.get('run'); run_g = prof.get('run') or prof.get('walk')
+        walk_T, walk_duty, walk_stride, walk = from_prof(walk_g, 'walk')
+        run_T, run_duty, run_stride, run = from_prof(run_g, 'run')
+    elif drv.plan == 'biped':
+        # people without a profile: Kenshi-like defaults (pelvis a little low, knees never locked)
+        L = drv.leg_len
+        walk_T, walk_duty, walk_ymax = 1.4, 0.6, -0.03 * L
+        walk_stride = min(0.84 * L, 0.95 * drv.stride_for(-walk_ymax + 0.03 * L))
+        run_T, run_duty, run_ymax = 0.6, 0.35, -0.066 * L
+        run_stride = min(1.0 * L, 0.95 * drv.stride_for(-run_ymax + 0.04 * L))
+        walk = walker(walk_stride, 0.22 * L, walk_duty, 0.0, 2.0, 2, 0.0, arm_amp=22, fore=18, fore_amp=9, arm_bias=-1.5,
+                      vault=True, ymax=walk_ymax, slack=0.994)
+        run = walker(run_stride, 0.6 * L, run_duty, 0.0, 9.0, 2, 0.0, arm_amp=62, fore=90, fore_amp=38, arm_bias=20,
+                     vault=True, ymax=run_ymax, slack=0.98)
+    else:
+        walk_T, walk_duty = 1.0, 0.55; walk_stride = min(0.55 * reach, 0.8 * drv.max_stride)
+        run_T, run_duty = 0.6, 0.45; run_stride = min(0.9 * reach, 0.85 * drv.stride_for(drv.run_crouch))
+        walk = walker(walk_stride, 0.10 * H, walk_duty, 0.008, 2.0, 5, drv.crouch)
+        run = walker(run_stride, 0.12 * H, run_duty, 0.012, 7.0, 3, drv.run_crouch)
+    gait = {'insect': 'alternating gait (tripod for six legs)', 'quadruped': 'trot (diagonal pairs)', 'biped': 'walk, arms swing'}.get(drv.plan, 'alternating gait')
+    clips = [
+        ClipDef('idle', 2.4, idle, True, 0.0, 'breathing, head looks around, feet planted'),
+        ClipDef('walk', walk_T, walk, True, walk_stride / (walk_duty * walk_T), gait + ', feet planted in stance'),
+        ClipDef('run', run_T, run, True, run_stride / (run_duty * run_T), 'longer strides, body pitched forward'),
         ClipDef('hover', 1.2, hover, True, 0.0, 'wingbeat %.1f Hz, legs folded, body bobs' % flap_hz),
         ClipDef('takeoff', 0.8, takeoff, False, 0.0, 'wings grow back in 0.25 s while the body lifts'),
         ClipDef('land', 0.8, land, False, 0.0, 'body comes down, wings shrink away in the last 0.25 s'),
         ClipDef('attack', 1.0, bite, False, 0.0, 'bite: rear back head up, lunge and snap the head down, recover'),
         ClipDef('sting', 1.2, sting, False, 0.0, 'sting: wind-up, fast jab with the abdomen swung under and forward, recover'),
     ]
+    return [c for c in clips if clip_fits(drv, c.name)]
+
+
+def clip_fits(drv, name):
+    """Which clips make sense for this body: flight needs wings, the sting an insect abdomen, the bite a head on a
+    four-legged or many-legged body (people get idle, walk and run for now)."""
+    if name in ('hover', 'takeoff', 'land'): return bool(drv.wings)
+    if name == 'sting': return drv.plan == 'insect' and bool(drv.abd)
+    if name == 'attack': return drv.plan != 'biped'
+    return True
