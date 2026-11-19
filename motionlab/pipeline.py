@@ -59,6 +59,7 @@ class Options:
         self.skeleton = None; self.name = None; self.plan = 'insect'; self.landmarks = None
         self.leg_bones = 4; self.wing_bones = 2; self.antenna_bones = 2; self.abdomen_bones = 3
         self.ground_wings = 'hidden'; self.clips = None; self.fps = 30; self.gifs = False; self.png = True
+        self.references = None     # reference clip .glb files: each becomes a clip retargeted from its curves (people)
         self.own_rig = 'auto'      # 'auto': keep a skeleton we recognise (Kenshi Bip01, Motion Lab names); 'yes' / 'no'
         for k, v in kw.items(): setattr(self, k, v)
 
@@ -149,6 +150,11 @@ def rig_file(model_path, out_dir, log=print, **kw):
     if a.clips:
         want = a.clips.split(',') if isinstance(a.clips, str) else list(a.clips)
         defs = [d for d in defs if d.name in want]
+    for ref in (a.references or []):                       # retarget reference clips (local files you may use)
+        from . import curves
+        nm = 'ref_' + os.path.splitext(os.path.basename(ref))[0]
+        defs.append(curves.curve_clip(drv, curves.extract(ref, fps=a.fps), nm))
+        log('reference %s -> clip %s' % (os.path.basename(ref), nm))
     clips = []; checks = {}
     for d in defs:
         clips.append(bake.bake(drv, d, fps=a.fps))

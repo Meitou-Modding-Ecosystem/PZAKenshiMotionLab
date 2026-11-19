@@ -29,6 +29,19 @@ animation data). A model on one of those skeletons moves by its own numbers; oth
 ours now comes out at: knee 11-83 degrees (Kenshi 12-73), pelvis 0.93-0.97 m (0.92-0.97), arm swing -23 / +24 degrees
 (-21 / +24). Four-legged animals are close but not exact yet (the dog walks a little lower than Kenshi's).
 
+**Retarget a reference clip onto a Kenshi body (`--reference`).** Give the rig command (or the add-on's *Reference
+clips* folder) skeleton-only reference clips, e.g. Mixamo downloads you converted with `tools/fbx_to_glb.py`, and each
+becomes a clip `ref_<file name>` on the body's OWN Kenshi skeleton. `motionlab/curves.py` reads the reference frame by
+frame into curves that do not depend on its bones or size (pelvis path against its standing height, the turn of
+pelvis, chest and head, where each foot and hand is, which way knees and elbows point) and the usual driver plays them
+on the Kenshi rig, scaled to it, with the floor / knee rules on. This is the most natural-looking motion the Motion
+Lab makes. **The repo ships only the code:** no reference files and nothing made from them. Use files you are allowed
+to use, and keep what you make from them where their licence allows (Mixamo's terms cover use in your own games).
+
+```bash
+python -m motionlab rig human_male.mesh --skeleton male_skeleton.skeleton -o out/human --reference my_clips/roll.glb --reference my_clips/jab.glb
+```
+
 **Knockdowns, get-ups and rolls learned from reference clips.** `motionlab/reference.py` reads a skeleton-only reference
 `.glb` (for example a Mixamo download converted by `tools/fbx_to_glb.py`, with your own Adobe account) and measures it:
 when the pelvis starts to drop and reaches the ground, the bounce, how far the body travels, which side it ends on,
@@ -203,6 +216,14 @@ python tests/test_own_rig.py
 
 ```bash
 python tests/fuzz/fuzz_glb.py 400
+```
+
+```bash
+python tests/test_curves.py
+```
+
+```bash
+python tests/fuzz/fuzz_reference.py 300
 ```
 
 The Blender add-on has a headless test (`tests/blender/test_addon.py`, run it with `BLENDER_USER_RESOURCES` pointing at

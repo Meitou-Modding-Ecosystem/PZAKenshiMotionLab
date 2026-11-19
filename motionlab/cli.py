@@ -14,7 +14,7 @@ def _load(path, skeleton=None):
 def cmd_rig(a):
     from .pipeline import rig_file
     kw = {k: getattr(a, k) for k in ('skeleton', 'name', 'plan', 'landmarks', 'leg_bones', 'wing_bones', 'antenna_bones',
-                                     'abdomen_bones', 'ground_wings', 'clips', 'fps', 'gifs', 'own_rig')}
+                                     'abdomen_bones', 'ground_wings', 'clips', 'fps', 'gifs', 'own_rig', 'references')}
     rig_file(a.model, a.out, **kw)
 
 
@@ -59,6 +59,9 @@ def main(argv=None):
     r.add_argument('--fps', type=int, default=30); r.add_argument('--gifs', action='store_true')
     r.add_argument('--own-rig', dest='own_rig', default='auto', choices=['auto', 'yes', 'no'],
                    help='keep the model own skeleton when it is one we know (Kenshi Bip01, Motion Lab names); default auto')
+    r.add_argument('--reference', dest='references', action='append', metavar='CLIP.glb',
+                   help='a skeleton-only reference clip (e.g. tools/fbx_to_glb.py output): retargeted onto a person '
+                        'rig as clip ref_<file name>; repeat for more. Use only files you may use; outputs stay yours to keep')
     v = sub.add_parser('view', help='render a clip of a rigged .glb to a GIF')
     v.add_argument('model'); v.add_argument('-o', '--out', required=True); v.add_argument('--clip')
     v.add_argument('--fps', type=int, default=30); v.add_argument('--bones', action='store_true')

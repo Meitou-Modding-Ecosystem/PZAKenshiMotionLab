@@ -16,7 +16,8 @@ bl_info = {"name": "PZA's Kenshi Motion Lab", "author": "PZA", "version": (0, 1,
            "location": "3D View > Sidebar > Motion Lab", "category": "Animation",
            "description": "Auto-rig a model and animate it from code, for Kenshi"}
 
-CLIPS = ('idle', 'walk', 'run', 'hover', 'takeoff', 'land', 'attack', 'sting')
+CLIPS = ('idle', 'walk', 'run', 'hover', 'takeoff', 'land', 'attack', 'sting',
+         'knockdown_back', 'knockdown_front', 'getup_back', 'getup_front', 'roll_forward', 'roll_dive')
 MARKERS = 'Motion Lab markers'
 
 
@@ -45,6 +46,9 @@ class MotionLabSettings(bpy.types.PropertyGroup):
     own_rig: EnumProperty(name='Rig', items=[
         ('auto', 'Keep its own rig if known', "Kenshi's Bip01 rigs (humans, animals) and Motion Lab rigs keep their skeleton and skin; others are auto-rigged"),
         ('no', 'Always auto-rig', 'Build a new skeleton from the mesh shape even if it has one')], default='auto')
+    ref_dir: StringProperty(name='Reference clips', subtype='DIR_PATH', default='',
+                            description='A folder of skeleton-only reference clips (.glb, e.g. converted Mixamo downloads): '
+                                        'each is retargeted onto a person rig as clip ref_<file name>. Use only files you may use')
     show_options: BoolProperty(name='Options', default=False)
     last_report: StringProperty(default='')
 
@@ -142,6 +146,12 @@ def _active_armature(context):
     return next((a for a in context.scene.objects if a.type == 'ARMATURE' and 'motionlab_landmarks' in a), None)
 
 
+def _references(s):
+    d = bpy.path.abspath(s.ref_dir) if s.ref_dir else ''
+    if not d or not os.path.isdir(d): return None
+    return [os.path.join(d, f) for f in sorted(os.listdir(d)) if f.lower().endswith('.glb')] or None
+
+
 def _run(context, src_glb, name, landmarks=None):
     s = context.scene.motion_lab
     clips = [c for c in CLIPS if getattr(s, 'clip_' + c)]
@@ -149,7 +159,7 @@ def _run(context, src_glb, name, landmarks=None):
     r = _ml().rig_file(src_glb, _out_dir(s), log=log.append, name=name, landmarks=landmarks, leg_bones=s.leg_bones,
                        wing_bones=s.wing_bones, antenna_bones=s.antenna_bones, abdomen_bones=s.abdomen_bones,
                        ground_wings=s.ground_wings, clips=','.join(clips), fps=s.fps, gifs=False, png=False,
-                       own_rig=s.own_rig)
+                       own_rig=s.own_rig, references=_references(s))
     context.scene.render.fps = s.fps; context.scene.render.fps_base = 1.0   # keys land on the clip's own frames
     arm, new, col = _import_result(r['glb'], r['name'], r['clips'])
     if arm is None: raise RuntimeError('the rigged file has no armature')
@@ -336,11 +346,11 @@ class MOTIONLAB_PT_panel(bpy.types.Panel):
         box.operator('motionlab.rig', icon='PLAY')
         box.prop(s, 'show_options', icon='TRIA_DOWN' if s.show_options else 'TRIA_RIGHT')
         if s.show_options:
-            box.prop(s, 'own_rig'); box.prop(s, 'ground_wings'); box.prop(s, 'out_dir')
+            box.prop(s, 'own_rig'); box.prop(s, 'ground_wings'); box.prop(s, 'out_dir'); box.prop(s, 'ref_dir')
             r = box.row(align=True); r.prop(s, 'leg_bones'); r.prop(s, 'wing_bones')
             r = box.row(align=True); r.prop(s, 'antenna_bones'); r.prop(s, 'abdomen_bones')
             box.prop(s, 'fps')
-            g = box.grid_flow(columns=4, align=True)
+            g = box.grid_flow(columns=2, align=True)
             for c in CLIPS: g.prop(s, 'clip_' + c, toggle=True)
         arm = _active_armature(context)
         box = L.box(); box.label(text='2. Clips', icon='ACTION')

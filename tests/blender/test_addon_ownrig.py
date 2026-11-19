@@ -1,9 +1,10 @@
 # PZA's Kenshi Motion Lab - Blender add-on test: a model with a Kenshi-style Bip01 rig keeps its rig. Author: PZA. GPLv3.
-#   BLENDER_USER_RESOURCES=<empty folder> blender -b --factory-startup --python tests/blender/test_addon_ownrig.py -- <addon zip> <biped .glb> <work dir>
+#   BLENDER_USER_RESOURCES=<empty folder> blender -b --factory-startup --python tests/blender/test_addon_ownrig.py -- <addon zip> <biped .glb> <work dir> [<reference clips folder>]
 import bpy, sys, json
 
 argv = sys.argv[sys.argv.index('--') + 1:]
 zip_path, glb, work = argv[0], argv[1], argv[2]
+ref_dir = argv[3] if len(argv) > 3 else ''
 res = {'steps': [], 'fail': []}
 def ok(cond, msg):
     res['steps'].append(('PASS ' if cond else 'FAIL ') + msg)
@@ -15,6 +16,7 @@ bpy.ops.wm.read_factory_settings(use_empty=True)
 if not hasattr(bpy.types.Scene, 'motion_lab'):
     import addon_utils; addon_utils.enable('bl_ext.user_default.pza_motion_lab', default_set=True)
 bpy.context.scene.motion_lab.out_dir = work
+bpy.context.scene.motion_lab.ref_dir = ref_dir
 bpy.ops.import_scene.gltf(filepath=glb)
 src_arm = next(o for o in bpy.context.scene.objects if o.type == 'ARMATURE')
 mesh = max((o for o in bpy.context.scene.objects if o.type == 'MESH'), key=lambda o: len(o.data.vertices))
@@ -25,7 +27,10 @@ arm = next((o for o in bpy.context.scene.objects if o.type == 'ARMATURE' and 'mo
 ok(r == {'FINISHED'} and arm is not None, 'rigged')
 ok(arm is not None and len(arm.data.bones) == n_src and 'Bip01 L Thigh' in arm.data.bones, 'own Bip01 rig kept (%d bones)' % (len(arm.data.bones) if arm else 0))
 clips = json.loads(arm['motionlab_clips']) if arm else []
-ok(clips == ['idle', 'walk', 'run'], 'clips for a person: %s' % clips)
+import os
+want = ['idle', 'walk', 'run', 'knockdown_back', 'knockdown_front', 'getup_back', 'getup_front', 'roll_forward', 'roll_dive']
+want += ['ref_' + os.path.splitext(f)[0] for f in sorted(os.listdir(ref_dir)) if f.lower().endswith('.glb')] if ref_dir else []
+ok(clips == want, 'clips for a person: %s' % clips)
 ok(arm.get('motionlab_plan') == 'biped', 'plan: %s' % arm.get('motionlab_plan'))
 ok(src_arm.hide_get() and mesh.hide_get(), 'original model and its old armature hidden')
 vis = [o.name for o in bpy.context.scene.objects if o.type == 'MESH' and not o.hide_get()]

@@ -271,19 +271,22 @@ class Driver:
     def reset(self):
         self.springs = {}; self.knee_floor_hits = 0; self.hand_releases = 0; self.body_floor_lifts = 0
 
-    def _upper_bones(self):
-        """Every bone that is not part of a leg (legs reach the floor on purpose; their own rules keep them out of it)."""
-        if getattr(self, '_upper', None) is None:
-            r = self.rig; leg = set(b for e, ch in self.legs for b in ch)
+    def _upper_bones(self, skip_arms=False):
+        """Every bone that is not part of a leg (legs reach the floor on purpose; their own rules keep them out of it),
+        and with skip_arms not part of an arm either."""
+        if getattr(self, '_upper', None) is None: self._upper = {}
+        if skip_arms not in self._upper:
+            r = self.rig; skip = set(b for e, ch in self.legs for b in ch)
+            if skip_arms: skip |= set(b for e, ch in self.arms for b in ch)
             out = []
             for b in range(r.n):
-                p = b; inleg = False
+                p = b; inside = False
                 while p >= 0:
-                    if p in leg: inleg = True; break
+                    if p in skip: inside = True; break
                     p = r.parents[p]
-                if not inleg: out.append(b)
-            self._upper = np.array(out, int)
-        return self._upper
+                if not inside: out.append(b)
+            self._upper[skip_arms] = np.array(out, int)
+        return self._upper[skip_arms]
 
     def _spring(self, key, kc):
         if key not in self.springs: self.springs[key] = Spring(*kc)
@@ -337,7 +340,8 @@ class Driver:
         W = r.fk(q, t, s)
         floor = spec.get('body_floor')
         if floor is not None:                                     # head / spine / arms never sink under the floor:
-            low = float(W[self._upper_bones(), 1, 3].min())     # lift the whole body by what is missing
+            ub = self._upper_bones(skip_arms=bool(spec.get('hands_rel')))   # arms placed by their own solver don't count
+            low = float(W[ub, 1, 3].min())                     # lift the whole body by what is missing
             if low < floor:
                 t[root] = t[root] + np.array([0.0, floor - low, 0.0])       # same frame as root_offset
                 W = r.fk(q, t, s); self.body_floor_lifts += 1
@@ -384,6 +388,8 @@ class Driver:
             turn = spec.get('root_rot')                            # a body lying down bends its knees its own way
             bend = e.get('bend')
             if bend is not None and turn is not None: bend = mx.q_rotate(turn, bend)
+            lb = spec.get('leg_bend', {}).get(e['name'])           # a reference clip says where the knee points
+            if lb is not None: bend = np.asarray(lb, float)
             pts = leg_ik(pts0, tgt, self.up, bend=bend)
             floor = spec.get('knee_floor')
             if floor is not None and len(pts) == 3 and pts[1][1] < floor:   # kneeling: the knee rests ON the floor
@@ -394,14 +400,25 @@ class Driver:
             if e.get('foot') in r.idx:                            # keep the foot / hoof at its rest angle (flat)
                 fq = r.qrest_w[r.b(e['foot'])]
                 if turn is not None and spec.get('feet_follow_body'): fq = mx.q_mul(turn, fq)
+                fd = spec.get('foot_delta', {}).get(e['name'])     # a reference clip turns the foot itself
+                if fd is not None: fq = mx.norm(mx.q_mul(fd, r.qrest_w[r.b(e['foot'])]))
                 r.set_world_rot(r.b(e['foot']), fq, q, t, s, W)
         # hands planted on the ground (get-ups): arms solved like legs, elbows bending back
-        hands = spec.get('hands', {})
+        hands = spec.get('hands', {}); rel = spec.get('hands_rel', {})
         for e, ch in list(self.arms):
             tgt = hands.get(e['side'])
-            if tgt is None or len(ch) < 2: continue
+            if (tgt is None and e['side'] not in rel) or len(ch) < 2: continue
             pts0 = r.chain_points(ch, W)
             reach = sum(r.length[b] for b in ch)
+            if tgt is None:                                       # a reference clip: hand relative to the shoulder,
+                v = np.asarray(rel[e['side']], float); n = np.linalg.norm(v)   # in arm lengths (kept just in reach)
+                if n > 0.97: v = v * (0.97 / n)
+                tgt = pts0[0] + v * reach
+                tgt[1] = max(tgt[1], float(spec.get('hand_floor', -1e9)))
+                ab = spec.get('arm_bend', {}).get(e['side'])
+                pts = leg_ik(pts0, tgt, self.up, bend=np.asarray(ab, float) if ab is not None else None)
+                r.aim_chain(ch, pts, q, t, s, W)
+                continue
             if np.linalg.norm(np.asarray(tgt, float) - pts0[0]) > 0.98 * reach:   # out of reach: the hand lets go
                 hands.pop(e['side'], None); self.hand_releases += 1
                 continue
