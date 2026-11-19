@@ -198,7 +198,12 @@ blender -b --factory-startup --python tools/blender_check.py -- out/my_creature/
   gaits), so it blends in and out. A whole jump cannot fit in 300 ms: that much air time only lifts the body ~11 cm.
 - Smoothness rule (tested): the hips never change speed by more than 1 m/s from one 1/60 s frame to the next in the
   walk, run and in-stride jumps. The run used to sag and snap back at each toe-off (6 m/s in one frame); the hip
-  height is now smoothed round the cycle and a foot the hips can no longer reach comes off its toes. Moves that travel
+  height is now smoothed round the cycle and a foot the hips can no longer reach comes off its toes.
+- Feet (tested in every clip: no foot changes speed by more than 8.5 m/s from one 1/60 s frame to the next): a swing
+  foot lifted close under the hip is lowered along the body's own down instead of being pushed round the hip (it
+  used to flip from behind to in front in one frame); the swing leaves and lands at part of the ground speed; a
+  kneeling knee keeps where the leg put it and, where the hips are too low for the thigh, the body is lifted
+  instead of the knee flipping sides; the stomach get-up's hands-and-knees hips sit one thigh length up. Moves that travel
   (knockdowns, rolls) carry the distance in the root bone; whether Kenshi wants that or an in-place clip is untested. Four-legged animals: idle, walk, run
   and a bite. The knockdowns end in one fixed lying pose; Kenshi's ragdoll and its own get-up timing are not matched.
 

@@ -170,12 +170,16 @@ def biped_moves(drv):
     ]
     # get up from the stomach: push up to hands and knees, kneel, stand
     gf = GETUP_FRONT; a = gf['push']; b = a + gf['kneel']; c = b + gf['rise']
+    # on hands and knees the hips are about one thigh length off the floor: lower than that, the knee cannot rest
+    # under the hip and the leg flips between knee-behind and knee-in-front as the knee comes forward
+    thigh = float(min(r.length[c_[0]] for e_, c_ in drv.legs))
+    kneel_py = max(0.36 * H0, thigh + 0.04 * H0)
     getup_front_keys = [
         (0.0, st(th=90, py=lie, fw=1.0, fz=-0.97 * L, arm=-6, fore=15, head=-30), 'lin'),
         (0.35 * a, st(th=85, py=lie + 0.04 * H0, fw=1.0, fz=-0.9 * L, arm=-6, hw=1.0, hz=0.0, hx=0.2, head=-15), 'smooth'),
-        (a, st(th=65, py=0.36 * H0, fw=1.0, fz=-0.45 * L, arm=-60, hw=1.0, hz=0.05, hx=0.12, head=-10), 'smooth'),
-        (a + 0.3 * gf['kneel'], st(th=50, py=0.42 * H0, fw=1.0, fz=-0.3 * L, arm=-50, fore=20, hw=1.0, hz=0.0, hx=0.1, head=-5, spine=5), 'smooth'),
-        (b, st(th=30, py=0.5 * H0, fw=1.0, fz=-0.1 * L, arm=-30, fore=40, head=0, spine=10), 'smooth'),
+        (a, st(th=65, py=kneel_py, fw=1.0, fz=-0.45 * L, arm=-60, hw=1.0, hz=0.05, hx=0.12, head=-10), 'smooth'),
+        (a + 0.3 * gf['kneel'], st(th=50, py=kneel_py + 0.02 * H0, fw=1.0, fz=-0.3 * L, arm=-50, fore=20, hw=1.0, hz=0.0, hx=0.1, head=-5, spine=5), 'smooth'),
+        (b, st(th=30, py=max(0.5 * H0, kneel_py + 0.04 * H0), fw=1.0, fz=-0.1 * L, arm=-30, fore=40, head=0, spine=10), 'smooth'),
         (b + 0.55 * gf['rise'], st(th=12, py=0.8 * H0, fw=0.5, fz=0.0, arm=-10, fore=25, spine=6), 'smooth'),
         (c, st(), 'smooth'),
     ]

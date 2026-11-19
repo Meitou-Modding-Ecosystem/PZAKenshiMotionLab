@@ -67,6 +67,15 @@ for cd in motion.standard_clips(drv):
         q, t, s, W = drv.pose(cd.fn(tt, cd.length), dt=1 / 60); ys.append(W[root_b][1, 3])
     jerk = float(np.abs(np.diff(np.diff(ys) * 60)).max())
     ok(jerk < 1.0, '%s: smooth hips (worst speed change %.2f m/s in one frame)' % (cd.name, jerk))
+# no foot snaps: from one 1/60 s frame to the next no foot changes speed by more than 8.5 m/s in ANY clip (the swing
+# foot used to flip from behind the hip to in front, and a kneeling knee from behind to in front: 10-35 m/s)
+for cd in motion.standard_clips(drv):
+    drv.reset(); P = []
+    for k in range(int(cd.length * 60) + 1):
+        tt = (k / 60) % cd.length if cd.loop else min(k / 60, cd.length)
+        q, t, s, W = drv.pose(cd.fn(tt, cd.length), dt=1 / 60); P.append([rig.chain_points(ch, W)[-1] for e, ch in drv.legs])
+    P = np.array(P); dv = np.linalg.norm(np.diff(np.diff(P, axis=0) * 60, axis=0), axis=2)
+    ok(dv.max() < 8.5, '%s: no foot snaps (worst speed change %.1f m/s in one frame)' % (cd.name, dv.max()))
 for name in STRIDE:                                   # in stride: off the ground soon after the start, back on the gait
     cd = [c for c in motion.standard_clips(drv) if c.name == name][0]
     ok(cd.speed > 0 and not cd.loop, '%s: moves at the gait speed (%.2f m/s)' % (name, cd.speed))
