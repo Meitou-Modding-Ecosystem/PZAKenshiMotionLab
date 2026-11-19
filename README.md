@@ -17,7 +17,8 @@ Two ways in:
 - **A model that is already rigged the Kenshi way** (Kenshi's humans of every race, its animals, anything exported with
   the same `Bip01 ...` bone names) **keeps its own skeleton and skin**. The Motion Lab recognises legs, arms, tail, ears
   and jaw by their names and adds the motion: people get idle, walk and run (arms swing) plus **knocked down onto the
-  back / onto the stomach, getting up from each, a forward roll and a dive roll**; four-legged animals get idle, walk, run (a trot) and a bite.
+  back / onto the stomach, getting up from each, a forward roll, a dive roll, a standing jump, a long jump, a jump
+  down from a ledge and two landings**; four-legged animals get idle, walk, run (a trot) and a bite.
 - **A model with no rig, or a rig it does not know** (a Meshy export), is **auto-rigged** from its shape. Today that
   auto-rig knows insect-like bodies (legs, wings, antennae, abdomen); more body plans later.
 
@@ -188,7 +189,9 @@ blender -b --factory-startup --python tools/blender_check.py -- out/my_creature/
 - **Not tried in Kenshi yet.** The clips are checked in Blender and by our own tests; the trip through Kenshi IO into
   the game is next.
 - Whether Kenshi plays bone *scale* keys (the wing shrink) is unknown: `--ground-wings folded` is the fallback.
-- People: idle, walk, run, two knockdowns, two get-ups, two forward rolls; no combat moves yet. Moves that travel
+- People: idle, walk, run, two knockdowns, two get-ups, two forward rolls, jumps (up, forward, down from a 1.22 m
+  ledge) and landings (soft, hard); no combat moves yet. Jump flights use real gravity (metres). Kenshi has no jump
+  of its own: these clips are for mods that add one (Meitou, Part B). The preview draws no ledge under jump_down. Moves that travel
   (knockdowns, rolls) carry the distance in the root bone; whether Kenshi wants that or an in-place clip is untested. Four-legged animals: idle, walk, run
   and a bite. The knockdowns end in one fixed lying pose; Kenshi's ragdoll and its own get-up timing are not matched.
 

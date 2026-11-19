@@ -176,3 +176,48 @@ def measure_roll(ts, P):
             'tuck_min': round(float(tuck.min()), 3), 'travel_along_facing': round(float(travel @ fwd0) / H0, 3),
             'pelvis_curve': [round(float(x / H0), 3) for x in y[:: max(1, len(y) // 40)]],
             'pitch_curve_deg': [round(float(x)) for x in ang[:: max(1, len(ang) // 40)]]}
+
+
+def measure_jump(ts, P):
+    """A jump or landing: ground = the lowest the feet reach in the clip, heights relative to the standing pelvis
+    height at the END (H). Crouch before take-off, take-off and touch-down (both feet off / a foot back down), peak,
+    the landing dip and when the body is up again, travel, and how high the arms swing."""
+    toes = {s: np.minimum(P[s + '_toe'][:, 1], P[s + '_foot'][:, 1]) for s in 'lr'}
+    ground = float(min(toes['l'].min(), toes['r'].min()))
+    hips = P['hips']; y = hips[:, 1] - ground; H = float(y[-1])
+    lift = {s: toes[s] - ground for s in 'lr'}
+    off = (lift['l'] > 0.05 * H) & (lift['r'] > 0.05 * H)
+    fwd0 = mx.norm(np.cross(P['l_thigh'][0] - P['r_thigh'][0], [0, 1, 0]))
+    t_off = t_land = None; k_off = k_land = None
+    if off.any():
+        # the longest airborne stretch
+        best = (0, 0); k = 0
+        while k < len(off):
+            if off[k]:
+                j = k
+                while j + 1 < len(off) and off[j + 1]: j += 1
+                if j - k > best[1] - best[0]: best = (k, j)
+                k = j + 1
+            else: k += 1
+        k_off, k_land = best[0], min(best[1] + 1, len(ts) - 1)
+        t_off, t_land = float(ts[k_off]), float(ts[k_land])
+    starts_in_air = bool(off[0])
+    pre = y[:k_off] if (k_off and not starts_in_air) else y[:1]
+    k_crouch = int(np.argmin(pre)) if len(pre) else 0
+    post = y[k_land:] if k_land is not None else y
+    k_dip = (k_land or 0) + int(np.argmin(post))
+    up_again = None
+    for k in range(k_dip, len(y)):
+        if y[k] >= 0.97 * H: up_again = float(ts[k]); break
+    hand_up = max(float(((P['l_hand'][:, 1] - P['l_shoulder'][:, 1]) / H).max()),
+                  float(((P['r_hand'][:, 1] - P['r_shoulder'][:, 1]) / H).max()))
+    trav = hips[-1] - hips[0]; trav[1] = 0
+    return {'pelvis_height_end_m': H, 'length_s': float(ts[-1]), 'starts_in_air': starts_in_air,
+            'start_height': round(float(y[0] / H), 3),
+            'crouch': round(float(pre[k_crouch] / H), 3) if len(pre) else None, 't_crouch_s': float(ts[k_crouch]),
+            't_takeoff_s': t_off, 't_touchdown_s': t_land, 'air_s': (t_land - t_off) if t_off is not None and t_land is not None else None,
+            'peak': round(float(y.max() / H), 3), 't_peak_s': float(ts[int(np.argmax(y))]),
+            'feet_lift_max': round(float(np.minimum(lift['l'], lift['r']).max() / H), 3),
+            'dip': round(float(y[k_dip] / H), 3), 't_dip_s': float(ts[k_dip]), 't_up_again_s': up_again,
+            'travel_along_facing': round(float(trav @ fwd0) / H, 3), 'hand_above_shoulder_max': round(hand_up, 3),
+            'pelvis_curve': [round(float(x / H), 3) for x in y[:: max(1, len(y) // 40)]]}

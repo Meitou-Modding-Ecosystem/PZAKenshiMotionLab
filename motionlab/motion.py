@@ -404,12 +404,17 @@ class Driver:
                 if fd is not None: fq = mx.norm(mx.q_mul(fd, r.qrest_w[r.b(e['foot'])]))
                 r.set_world_rot(r.b(e['foot']), fq, q, t, s, W)
         # hands planted on the ground (get-ups): arms solved like legs, elbows bending back
-        hands = spec.get('hands', {}); rel = spec.get('hands_rel', {})
+        hands = spec.get('hands', {}); rel = spec.get('hands_rel', {}); down = spec.get('hands_down', {})
         for e, ch in list(self.arms):
             tgt = hands.get(e['side'])
-            if (tgt is None and e['side'] not in rel) or len(ch) < 2: continue
+            if (tgt is None and e['side'] not in rel and e['side'] not in down) or len(ch) < 2: continue
             pts0 = r.chain_points(ch, W)
             reach = sum(r.length[b] for b in ch)
+            if tgt is None and e['side'] in down:                 # a hand put down on the floor near its shoulder:
+                hz, hx, hy = down[e['side']]                      # hz forward / hx outward in arm lengths
+                out = 1.0 if e['side'] == 'L' else -1.0
+                tgt = np.array([pts0[0][0] + out * hx * reach, hy, pts0[0][2] + hz * reach])
+                hands[e['side']] = tgt; spec['hands'] = hands
             if tgt is None:                                       # a reference clip: hand relative to the shoulder,
                 v = np.asarray(rel[e['side']], float); n = np.linalg.norm(v)   # in arm lengths (kept just in reach)
                 if n > 0.97: v = v * (0.97 / n)

@@ -18,7 +18,8 @@ ok(len(rm['legs']) == 2 and len(rm['arms']) == 2, 'legs %d, arms %d' % (len(rm['
 ok(all(e.get('foot') for e in rm['legs']), 'feet kept level: %s' % [e.get('foot') for e in rm['legs']])
 drv = motion.Driver(motion.Rig(m.skeleton, rm))
 names = [c.name for c in motion.standard_clips(drv)]
-MOVES = ['knockdown_back', 'knockdown_front', 'getup_back', 'getup_front', 'roll_forward', 'roll_dive']
+MOVES = ['knockdown_back', 'knockdown_front', 'getup_back', 'getup_front', 'roll_forward', 'roll_dive',
+         'jump_up', 'jump_forward', 'jump_down', 'land_soft', 'land_hard']
 ok(names == ['idle', 'walk', 'run'] + MOVES, 'clips for a person: %s' % names)
 for cd in motion.standard_clips(drv):
     if cd.name in MOVES: continue
@@ -29,7 +30,11 @@ for cd in motion.standard_clips(drv):
 for cd in motion.standard_clips(drv):
     if cd.name not in MOVES: continue
     mc = check.move_check(drv, cd)
-    if cd.name.startswith('roll'):                     # stand -> roll over the back (pelvis low) -> stand again
+    if cd.name.startswith(('jump', 'land')):           # end standing; a jump starts standing, a ledge / fall starts high
+        start_ok = abs(mc['pelvis_start'] - 1) < 0.03 if cd.name in ('jump_up', 'jump_forward') else mc['pelvis_start'] > 1.5
+        ok(start_ok and abs(mc['pelvis_end'] - 1) < 0.03 and mc['pelvis_min'] < 0.8,
+           '%s: pelvis %.2f -> lowest %.2f -> %.2f of standing height' % (cd.name, mc['pelvis_start'], mc['pelvis_min'], mc['pelvis_end']))
+    elif cd.name.startswith('roll'):                     # stand -> roll over the back (pelvis low) -> stand again
         ok(abs(mc['pelvis_start'] - 1) < 0.03 and abs(mc['pelvis_end'] - 1) < 0.03 and mc['pelvis_min'] < 0.3,
            '%s: pelvis %.2f -> lowest %.2f -> %.2f of standing height' % (cd.name, mc['pelvis_start'], mc['pelvis_min'], mc['pelvis_end']))
     else:
@@ -40,6 +45,17 @@ for cd in motion.standard_clips(drv):
     ok(mc['hand_miss_m'] < 0.05, '%s: planted hand miss %.3f m (%d let go out of reach, %d knees set on the floor, %d body lifts)'
        % (cd.name, mc['hand_miss_m'], mc['hand_releases'], mc['knee_floor_hits'], mc['body_floor_lifts']))
     ok(not cd.loop and 1.0 < cd.length < 5.0, '%s: one-shot, %.2f s' % (cd.name, cd.length))
+# jumps really leave the ground (both feet up at the top of the flight) and the long jump lands where it says
+rig = drv.rig; feet_b = [rig.b('Bip01 L Foot'), rig.b('Bip01 R Foot')]; root_b = rig.b('Bip01')
+for name in ('jump_up', 'jump_forward'):
+    cd = [c for c in motion.standard_clips(drv) if c.name == name][0]; drv.reset()
+    lift = []
+    for k in range(int(cd.length * 30) + 1):
+        q, t, s, W = drv.pose(cd.fn(k / 30, cd.length)); lift.append(min(W[b][1, 3] for b in feet_b))
+    rest_ankle = min(rig.Wrest[b][1, 3] for b in feet_b)
+    ok(max(lift) - rest_ankle > 0.2, '%s: both feet leave the ground (%.2f m at the top)' % (name, max(lift) - rest_ankle))
+    q, t, s, W = drv.pose(cd.fn(cd.length, cd.length)); z = W[root_b][2, 3] - rig.Wrest[root_b][2, 3]
+    ok(abs(z - (1.8 if name == 'jump_forward' else 0.0) * rig.Wrest[root_b][1, 3]) < 0.05, '%s: lands %.2f m forward' % (name, z))
 # through the file pipeline: the rig and skin come out unchanged
 d = tempfile.mkdtemp(); src = os.path.join(d, 'biped.glb')
 gltf.write_glb(src, m)

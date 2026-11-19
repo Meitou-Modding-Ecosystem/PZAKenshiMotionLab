@@ -68,12 +68,10 @@ def gif_from_clip(model, sk, clip_nodes, length, path, fps=30, speed=0.0, cam=No
     centre = np.array([0, 0.5 * (hi[1] - lo[1]), 0])
     cam = cam or render.Camera(centre, yaw, pitch, max(1.45 * float(np.linalg.norm(hi - lo)), 2.3 * float(hi[1] - lo[1])), size=(480, 360))
     R = render.Renderer(model, cam)
-    # follow the body up (hover / takeoff): aim at the highest root height the clip reaches, half way
     r0 = sk.parents.index(-1)
-    ry = [sk.world(sample_read_clip(sk, clip_nodes, t))[r0][1, 3] for t in np.linspace(0, length, 6)]
-    cam.target = cam.target + np.array([0, 0.6 * max(0.0, max(ry) - sk.world_rest()[r0][1, 3]), 0])
     # follow a body that travels (rolls, knockdowns): keep the root centred and scroll the floor instead
     x0 = sk.world(sample_read_clip(sk, clip_nodes, 0.0))[r0][:3, 3]
+    y_rest = float(sk.world_rest()[r0][1, 3])
     frames = []
     n = int(round(length * fps))
     for r_ in range(repeats):
@@ -82,11 +80,13 @@ def gif_from_clip(model, sk, clip_nodes, length, path, fps=30, speed=0.0, cam=No
             W = sk.world(sample_read_clip(sk, clip_nodes, t))
             P, N = model.skin(W)
             T = (r_ * n + k) / fps
-            d = W[r0][:3, 3] - x0; d[1] = 0.0
-            if float(np.abs(d).max()) > 1e-6: P = P - d
+            d = W[r0][:3, 3] - x0; dy = float(W[r0][1, 3]) - y_rest; d[1] = 0.0
+            # up / down: the camera rises with a body above its standing height (hover, a jump, a ledge, a high fall)
+            lift = max(0.0, dy - 0.1 * float(hi[1] - lo[1]))
+            if float(np.abs(d).max()) > 1e-6 or lift > 0: P = P - d - np.array([0.0, lift, 0.0])
             gx, gz = float(d[0]), float(d[2])
             ov = (lambda img, z, pr, W=W: render.draw_bones(img, z, pr, W, sk.parents)) if bones else None
-            im = R.frame(P, ground_offset=(gx, speed * T + gz), overlay=ov)
+            im = R.frame(P, ground_y=-lift, ground_offset=(gx, speed * T + gz), overlay=ov)
             if label:
                 ImageDraw.Draw(im).text((10, 8), label, fill=(40, 34, 28))
             frames.append(im)
