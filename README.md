@@ -27,7 +27,7 @@ how far the knee straightens and bends, arm swing, elbow) are measured from Kens
 skeleton that has them (`tools/build_gait_profiles.py`, table in `motionlab/data/kenshi_gaits.json`: numbers only, no
 animation data). A model on one of those skeletons moves by its own numbers; other people and animals use the median.
 `tools/measure_gait.py` prints the same numbers for Kenshi's clips and for ours side by side. For Kenshi's human walk
-ours now comes out at: knee 11-83 degrees (Kenshi 12-73), pelvis 0.93-0.97 m (0.92-0.97), arm swing -23 / +24 degrees
+ours now comes out at: knee 8-83 degrees (Kenshi 12-73), pelvis 0.93-0.97 m (0.92-0.97), arm swing -23 / +24 degrees
 (-21 / +24). Four-legged animals are close but not exact yet (the dog walks a little lower than Kenshi's).
 
 **Retarget a reference clip onto a Kenshi body (`--reference`).** Give the rig command (or the add-on's *Reference
@@ -203,7 +203,11 @@ blender -b --factory-startup --python tools/blender_check.py -- out/my_creature/
   foot lifted close under the hip is lowered along the body's own down instead of being pushed round the hip (it
   used to flip from behind to in front in one frame); the swing leaves and lands at part of the ground speed; a
   kneeling knee keeps where the leg put it and, where the hips are too low for the thigh, the body is lifted
-  instead of the knee flipping sides; the stomach get-up's hands-and-knees hips sit one thigh length up. Moves that travel
+  instead of the knee flipping sides; the stomach get-up's hands-and-knees hips sit one thigh length up.
+- The run, side by side with Kenshi's own on the same body: the elbow bends most as the arm comes FORWARD (fist up
+  by the chest; a flipped sign threw a straight arm forward), the chest leans 20 degrees, the heel kicks highest 35%
+  into the swing (behind the body) and comes through low, and the back foot only pushes off in the second half of
+  its stance (Kenshi plants it for ~15% of the stride, ours for 30%) instead of dragging the hips down. Moves that travel
   (knockdowns, rolls) carry the distance in the root bone; whether Kenshi wants that or an in-place clip is untested. Four-legged animals: idle, walk, run
   and a bite. The knockdowns end in one fixed lying pose; Kenshi's ragdoll and its own get-up timing are not matched.
 

@@ -504,9 +504,13 @@ class ClipDef:
 
 
 SWING_MATCH = 0.6
+HIP_MARGIN = 0.0
+PUSH_ON = 1
+RUN_PITCH = 20.0              # a person's run leans the chest forward (Kenshi's run, side by side)
+RUN_LIFT_PEAK = 0.35           # a run's heel is highest 35% into the swing, behind the body
 
 
-def gait_feet(drv, phase, stride, lift, duty, ground=0.0, centre=0.0):
+def gait_feet(drv, phase, stride, lift, duty, ground=0.0, centre=0.0, lift_peak=0.5):
     """Foot targets; feet['_stance'] lists the legs that are planted this frame (for the slip check)."""
     feet = {'_stance': set()}
     for e, ch in drv.legs:
@@ -520,7 +524,13 @@ def gait_feet(drv, phase, stride, lift, duty, ground=0.0, centre=0.0):
             # swing that starts from a standstill jerks the foot the instant it lifts
             u = (p - duty) / (1 - duty); m = -SWING_MATCH * stride * (1 - duty) / max(duty, 1e-6)
             h00 = 2 * u ** 3 - 3 * u ** 2 + 1; h10 = u ** 3 - 2 * u ** 2 + u; h01 = -2 * u ** 3 + 3 * u ** 2; h11 = u ** 3 - u ** 2
-            off = -0.5 * stride * h00 + m * h10 + 0.5 * stride * h01 + m * h11; h = lift * np.sin(np.pi * u)
+            off = -0.5 * stride * h00 + m * h10 + 0.5 * stride * h01 + m * h11
+            # the foot is highest EARLY in the swing (the heel kicks up behind) and comes through low; peaking at
+            # mid-swing lifted the knee high in front ('high-knees' running). lift_peak = where in the swing.
+            # warp w(u) = u + c u (1 - u), w(lift_peak) = 0.5: smooth, finite slope at both ends (a power curve
+            # here yanked the foot up the instant it lifted)
+            lp = float(np.clip(lift_peak, 0.27, 0.73)); c = (0.5 - lp) / (lp * (1 - lp))
+            h = lift * np.sin(np.pi * (u + c * u * (1 - u)))
         feet[e['name']] = np.array([tip[0], ground + max(tip[1], 0.0) + h, tip[2] + centre + off])
     return feet
 
@@ -553,7 +563,7 @@ def standard_clips(drv, ground_wings='hidden'):
         return out
 
     def walker(stride, lift, duty, bob, pitch, lean_head, crouch, arm_amp=0.0, fore=0.0, vault=False, air=0.0,
-               ymax=0.0, slack=0.985, arm_bias=0.0, fore_amp=0.0, centre=0.0, all_legs=False):
+               ymax=0.0, slack=0.985, arm_bias=0.0, fore_amp=0.0, centre=0.0, all_legs=False, lift_peak=0.5, push_from=1.0):
         cache = {}
 
         def fn(t, T):
@@ -566,7 +576,13 @@ def standard_clips(drv, ground_wings='hidden'):
                 N = 360; ys = np.array([raw(k / N * T, T)['root_offset'][1] for k in range(N)])
                 sig = max(1.0, 0.03 / T * N); x = np.arange(-int(4 * sig), int(4 * sig) + 1)
                 g = np.exp(-0.5 * (x / sig) ** 2); g /= g.sum()
-                cache[T] = np.array([float(np.dot(g, ys[(k + x) % N])) for k in range(N)])
+                sm = np.array([float(np.dot(g, ys[(k + x) % N])) for k in range(N)])
+                # never above the vault (the knee keeps Kenshi's least bend), but over a few samples: a one-sample
+                # dip in the raw vault (no foot counted for an instant) would come straight through as a jolt
+                wn = max(2, int(0.012 / T * N)); win = np.arange(-wn, wn + 1)
+                dil = np.array([ys[(k + win) % N].max() for k in range(N)])
+                cap = np.array([dil[(k + win) % N].min() for k in range(N)])   # fills narrow dips, keeps the peaks
+                cache[T] = np.minimum(sm, cap + HIP_MARGIN * drv.leg_len)
             tab = cache[T]; N = len(tab); f = (t / T % 1.0) * N; k0 = int(f) % N
             y = float(tab[k0] + (tab[(k0 + 1) % N] - tab[k0]) * (f - int(f)))
             feet = dict(sp['feet']); st = set(feet.get('_stance', ()))
@@ -580,11 +596,16 @@ def standard_clips(drv, ground_wings='hidden'):
         def raw(t, T):
             ph = t / T
             w = 2 * np.pi * ph
-            feet = gait_feet(drv, ph, stride, lift, duty, centre=centre)
+            feet = gait_feet(drv, ph, stride, lift, duty, centre=centre, lift_peak=lift_peak)
             if vault:                                   # people: hips ride over the stance leg, a hop when no foot is down
                 vf = feet
                 if all_legs:                            # the swinging leg reaching for its next step counts too
                     vf = dict(feet); vf['_stance'] = {e['name'] for e, c in drv.legs if e['name'] in feet}
+                if push_from < 1.0:                     # late in its stance a foot is rolling onto its toes and pushing
+                    vf = dict(vf); vf['_stance'] = set(vf['_stance'])   # off: it no longer pulls the hips down
+                    for e, c in drv.legs:
+                        pp = (ph + drv.phase[e['name']]) % 1.0
+                        if pp < duty and pp / duty > push_from: vf['_stance'].discard(e['name'])
                 v = drv.vault(vf, slack)
                 if v is not None: y = min(v, ymax)
                 else:                                   # airborne: a small hop, never higher than the feet can follow
@@ -595,7 +616,10 @@ def standard_clips(drv, ground_wings='hidden'):
             else:
                 y = -crouch + bob * H * np.cos(2 * w)
             sw = {k: v + arm_bias for k, v in arm_swing(ph, arm_amp).items()}
-            fb = {k: fore + fore_amp * (v - arm_bias) / max(arm_amp, 1e-6) for k, v in sw.items()}   # elbow bends more as the arm comes forward
+            # the elbow bends most as the arm comes FORWARD (fist up by the chest, Kenshi's run) and opens as it goes
+            # back; arm_swing is + = back, so forward is the negative side (this sign was flipped: a straight arm
+            # thrown forward, 'Forrest Gump')
+            fb = {k: fore - fore_amp * (v - arm_bias) / max(arm_amp, 1e-6) for k, v in sw.items()}
             return {'arm_swing': sw, 'forearm_bend': fb, 'root_offset': (0, y, 0),
                     'body_rot': mx.q_mul(ax(X, pitch), ax(Z, 2.0 * np.sin(w))),
                     'head_rot': ax(Y, lean_head * np.sin(w)),
@@ -685,8 +709,12 @@ def standard_clips(drv, ground_wings='hidden'):
             low = max(float(g['pelvis_drop'][1]), 0.03) * L          # the pelvis dips this low to reach the long steps
             stride = min(float(g['stride']) * L, 0.95 * drv.stride_for(low))
             lift = float(g['lift']) * L
-            pitch = 2.0 if kind == 'walk' else (9.0 if drv.plan == 'biped' else 4.0)
-            kw = dict(vault=True, ymax=ymax, slack=slack, centre=float(g.get('foot_centre', 0.0)) * L, all_legs=True)
+            pitch = 2.0 if kind == 'walk' else (RUN_PITCH if drv.plan == 'biped' else 4.0)
+            kw = dict(vault=True, ymax=ymax, slack=slack, centre=float(g.get('foot_centre', 0.0)) * L, all_legs=True,
+                      lift_peak=RUN_LIFT_PEAK if kind == 'run' else 0.5,
+                      # Kenshi's run plants a foot for ~15% of the stride, ours for 30%+ (the IK needs it): the second
+                      # part of our stance is the toe push and no longer holds the hips down
+                      push_from=min(1.0, max(0.3, float(g['duty']) / duty)) if (kind == 'run' and PUSH_ON) else 1.0)
             if 'arm_deg' in g and drv.arms:
                 lo_, hi_ = g['arm_deg']; e0, e1 = g.get('elbow_deg', [10, 30])
                 kw.update(arm_amp=(hi_ - lo_) / 2, arm_bias=-(hi_ + lo_) / 2 - pitch, fore=(e0 + e1) / 2, fore_amp=(e1 - e0) / 2)
