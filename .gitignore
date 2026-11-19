@@ -7,3 +7,5 @@ out/
 __pycache__/
 *.pyc
 .vs/
+# curves measured from the local Kenshi install (animation data: never committed or shipped)
+motionlab/data/kenshi_curves.json

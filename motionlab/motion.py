@@ -15,6 +15,22 @@ def smoothstep(x):
     x = np.clip(x, 0.0, 1.0); return x * x * (3 - 2 * x)
 
 
+def q_rotvec(v):
+    """Quaternion of a rotation vector in degrees (x = pitch, + leans forward / toe down; y = yaw; z = roll)."""
+    v = np.asarray(v, float); a = float(np.linalg.norm(v))
+    return mx.q_identity() if a < 1e-9 else mx.q_axis_angle(v / a, np.radians(a))
+
+
+def periodic_curve(knots, vals, x):
+    """Smooth closed curve through (knots, vals) on [0, 1) (Catmull-Rom between neighbours, wrapping round)."""
+    n = len(knots); x = x % 1.0
+    k = int(np.searchsorted(knots, x, side='right') - 1) % n
+    k1 = (k + 1) % n; span = (knots[k1] - knots[k]) % 1.0 or 1.0
+    u = ((x - knots[k]) % 1.0) / span
+    p0, p1, p2, p3 = vals[(k - 1) % n], vals[k], vals[k1], vals[(k + 2) % n]
+    return 0.5 * ((2 * p1) + (-p0 + p2) * u + (2 * p0 - 5 * p1 + 4 * p2 - p3) * u * u + (-p0 + 3 * p1 - 3 * p2 + p3) * u ** 3)
+
+
 class Rig:
     def __init__(self, sk, rigmap):
         self.sk = sk; self.map = rigmap; n = len(sk)
@@ -191,6 +207,7 @@ class Driver:
     def __init__(self, rig, ground_wings='hidden', spring_antenna=(70.0, 7.0), spring_abdomen=(160.0, 14.0)):
         self.rig = rig; self.map = rig.map; self.ground_wings = ground_wings
         self.knee_floor_hits = 0; self.hand_releases = 0; self.body_floor_lifts = 0; self.swing_caps = 0; self.knee_floor_lifts = 0   # rule counters
+        self.hip_caps = 0
         self._upper = None
         self.phase = leg_phases(self.map)
         self.sa = spring_antenna; self.sb = spring_abdomen
@@ -209,6 +226,18 @@ class Driver:
         self.knee_max = (max(km) + 5.0) if km else None        # never fold a knee further than the clips do
         Wr = r.Wrest
         self.rest_tip = {e['name']: np.array(e['tip']) for e, _ in self.legs}
+        # feet that roll (people): the toe bone under the foot, the ball (toe joint) and an estimated heel point, each
+        # as an offset from the ankle at rest; the foot pivots about the heel at heel strike and the ball at toe-off
+        self.toe, self.pivots = {}, {}
+        for e, _ in self.legs:
+            fb = e.get('foot')
+            if fb not in r.idx: continue
+            kids = r.sk.children(r.b(fb))
+            if not kids: continue
+            tb = kids[0]; ball = Wr[tb][:3, 3] - self.rest_tip[e['name']]
+            if ball[2] <= 0.02 * rig.height: continue                # no forward toe: not a person's foot
+            self.toe[e['name']] = tb
+            self.pivots[e['name']] = {'ball': ball, 'heel': np.array([0.0, ball[1], -0.35 * ball[2]])}
         reach = [np.linalg.norm((self.rest_tip[e['name']] - Wr[c[0]][:3, 3])[[0, 2]]) for e, c in self.legs] or [0.5]
         self.reach = float(np.median(reach))
         lens = [np.linalg.norm(np.diff(r.chain_points(c, Wr), axis=0), axis=1).sum() for e, c in self.legs] or [1.0]
@@ -253,15 +282,18 @@ class Driver:
                     lim.append(lo_)
             return 2.0 * min(lim) if lim else 0.5
 
-    def vault(self, feet, slack=0.985):
+    def vault(self, feet, slack=0.985, rot=None):
         """Highest root offset at which every planted foot is still within reach of its hip: the inverted-pendulum
-        vault of a walk (hips rise over a straight stance leg, drop at double support). None when no foot is down."""
+        vault of a walk (hips rise over a straight stance leg, drop at double support). None when no foot is down.
+        rot: the root's turn this frame (the hips swing with the pelvis)."""
         st = feet.get('_stance', set()); best = None
+        rootp = self._Wr[self.rig.b(self.map['root'])][:3, 3]
         for e, ch in self.legs:
             if e['name'] not in st: continue
             P0 = self.rig.chain_points(ch, self._Wr); kk = (len(ch) + 1) // 2
             L = slack * (np.linalg.norm(P0[kk] - P0[0]) + np.linalg.norm(P0[-1] - P0[kk]))
-            hip = P0[0]; f = np.asarray(feet[e['name']])
+            hip = P0[0] if rot is None else rootp + mx.q_rotate(rot, P0[0] - rootp)
+            f = np.asarray(feet[e['name']])
             dh = (f - hip)[[0, 2]]; h2 = L * L - float(dh @ dh)
             if h2 <= 0: continue
             off = (f[1] + np.sqrt(h2)) - hip[1]
@@ -270,6 +302,7 @@ class Driver:
 
     def reset(self):
         self.springs = {}; self.knee_floor_hits = 0; self.hand_releases = 0; self.body_floor_lifts = 0; self.swing_caps = 0; self.knee_floor_lifts = 0
+        self.hip_caps = 0
 
     def _placed_arms(self, spec, W):
         """Sides whose hand the arm solver will place this frame: a reference clip's hands, and hands put down that
@@ -336,6 +369,15 @@ class Driver:
                 fb = spec.get('forearm_bend', 0.0)
                 if isinstance(fb, dict): fb = fb.get(e['side'], 0.0)
                 q[ch[1]] = r.local_from_world_delta(ch[1], mx.q_axis_angle([1, 0, 0], np.radians(-fb)))
+        ar = spec.get('arm_rel')
+        if ar:                                                    # measured arms: shoulder, upper arm, forearm, hand,
+            for e, ch in self.arms:                               # each turned against its parent
+                sd = e['side']; up = ch[0]
+                parts = [('clav', r.parents[up]), ('upper', up), ('fore', ch[1] if len(ch) > 1 else -1),
+                         ('hand', r.b(e['hand']) if e.get('hand') in r.idx else -1)]
+                for k, b in parts:
+                    qd = ar.get(sd + '_' + k)
+                    if qd is not None and b >= 0: q[b] = r.local_from_world_delta(b, qd)
         for k, b in enumerate(self.abd):
             if 'abdomen_rot' in spec and k < len(spec['abdomen_rot']):
                 q[b] = r.local_from_world_delta(b, spec['abdomen_rot'][k])
@@ -435,7 +477,13 @@ class Driver:
                     if turn is not None and spec.get('feet_follow_body'): fq = mx.q_mul(turn, fq)
                     fd = spec.get('foot_delta', {}).get(e['name'])     # a reference clip turns the foot itself
                     if fd is not None: fq = mx.norm(mx.q_mul(fd, r.qrest_w[r.b(e['foot'])]))
+                    fp = feet.get('_pitch', {}).get(e['name'])         # a rolling foot (heel strike .. toe-off)
+                    if fp is not None: fq = mx.norm(mx.q_mul(mx.q_axis_angle([1, 0, 0], np.radians(fp)), fq))
                     r.set_world_rot(r.b(e['foot']), fq, q, t, s, W)
+                    tb = self.toe.get(e['name']); tp = feet.get('_toe', {}).get(e['name'])
+                    if tb is not None and tp is not None:              # the toes bend against the foot (flat at push-off)
+                        tq = mx.q_mul(mx.q_axis_angle([1, 0, 0], np.radians((fp or 0.0) + tp)), r.qrest_w[tb])
+                        r.set_world_rot(tb, mx.norm(tq), q, t, s, W)
             if need <= 1e-4 or attempt == 3: break
             lifted += need; q, t, W = q_b.copy(), t_b.copy(), W_b.copy()
             t[root] = t[root] + np.array([0.0, lifted, 0.0]); W = r.fk(q, t, s)
@@ -508,15 +556,52 @@ HIP_MARGIN = 0.0
 PUSH_ON = 1
 RUN_PITCH = 20.0              # a person's run leans the chest forward (Kenshi's run, side by side)
 RUN_LIFT_PEAK = 0.35           # a run's heel is highest 35% into the swing, behind the body
+TURNS_ON = True                # people: pelvis / chest / head turns measured from Kenshi's clips (2026-11-19)
+ROLL_ON = True                 # people: feet roll heel strike -> toe-off (2026-11-19)
+ARMS_ON = True                 # people: shoulders / arms / hands measured from Kenshi's clips (2026-11-19)
+PATH_ON = True                 # people: the ankle follows Kenshi's measured path (stance planted) (2026-11-19)
 
 
-def gait_feet(drv, phase, stride, lift, duty, ground=0.0, centre=0.0, lift_peak=0.5):
-    """Foot targets; feet['_stance'] lists the legs that are planted this frame (for the slip check)."""
+def roll_knots(roll, duty):
+    """Our cycle's knots for a measured foot roll (stance samples over our stance, swing samples over our swing)."""
+    n = len(roll['stance']); us = np.linspace(0, 1, n)
+    kn = list(us[:-1] * duty) + list(duty + us[:-1] * (1 - duty))
+    return (np.array(kn), np.array(list(roll['stance'][:-1]) + list(roll['swing'][:-1]), float),
+            np.array(list(roll['toe_stance'][:-1]) + list(roll['toe_swing'][:-1]), float))
+
+
+def roll_offset(piv, pitch):
+    """How far the ankle moves when the foot pitches about its heel (toe up, pitch < 0) or ball (heel up, > 0) while
+    that point stays put. Zero at pitch 0, so the switch between the two is seamless."""
+    d = piv['ball'] if pitch > 0 else piv['heel']
+    return mx.q_rotate(mx.q_axis_angle([1, 0, 0], np.radians(pitch)), -d) + d
+
+
+def _cr(vals, u):
+    """Catmull-Rom through evenly spaced samples on [0, 1] (ends held)."""
+    v = np.asarray(vals, float); n = len(v) - 1; x = float(np.clip(u, 0, 1)) * n
+    k = min(int(x), n - 1); t = x - k
+    p0, p1, p2, p3 = v[max(k - 1, 0)], v[k], v[k + 1], v[min(k + 2, n)]
+    return 0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (-p0 + 3 * p1 - 3 * p2 + p3) * t ** 3)
+
+
+def gait_feet(drv, phase, stride, lift, duty, ground=0.0, centre=0.0, lift_peak=0.5, roll=None, path=None):
+    """Foot targets; feet['_stance'] lists the legs that are planted this frame (for the slip check). roll: a measured
+    foot roll (profiles._turns): the foot pitches heel strike -> flat -> toe-off about its heel / ball, which stays
+    planted (feet['_pitch'], feet['_toe'], feet['_pivot'] say how, for the driver and the slip check)."""
     feet = {'_stance': set()}
+    kn = pv = tv = None
+    if roll is not None and drv.pivots:
+        kn, pv, tv = roll_knots(roll, duty)
+        feet['_pitch'], feet['_toe'], feet['_pivot'] = {}, {}, {}
     for e, ch in drv.legs:
         p = (phase + drv.phase[e['name']]) % 1.0
         tip = drv.rest_tip[e['name']].copy()
         if e.get('lifted'): continue                             # lifted legs ride along with the body
+        if path is not None:                                     # measured (people): the ankle's own path
+            pos = _path_foot(drv, e, tip, p, duty, path, ground, roll, kn, pv, tv, feet)
+            if p < duty: feet['_stance'].add(e['name'])
+            feet[e['name']] = pos; continue
         if p < duty:
             u = p / duty; off = stride * (0.5 - u); h = 0.0; feet['_stance'].add(e['name'])
         else:
@@ -531,8 +616,52 @@ def gait_feet(drv, phase, stride, lift, duty, ground=0.0, centre=0.0, lift_peak=
             # here yanked the foot up the instant it lifted)
             lp = float(np.clip(lift_peak, 0.27, 0.73)); c = (0.5 - lp) / (lp * (1 - lp))
             h = lift * np.sin(np.pi * (u + c * u * (1 - u)))
-        feet[e['name']] = np.array([tip[0], ground + max(tip[1], 0.0) + h, tip[2] + centre + off])
+        pos = np.array([tip[0], ground + max(tip[1], 0.0) + h, tip[2] + centre + off])
+        if roll is not None and e['name'] in drv.pivots:
+            piv = drv.pivots[e['name']]
+            fp = float(periodic_curve(kn, pv, p)); feet['_pitch'][e['name']] = fp
+            feet['_toe'][e['name']] = float(periodic_curve(kn, tv, p))
+            # in the stance the heel / ball really is the pivot (stays planted); in the swing that hold fades out
+            # and back (cos^2) so the measured ankle lift is not counted twice
+            # (in the air the offset holds its toe-off / heel-strike value while it fades: following a fast-turning
+            # foot through 100+ deg there whipped the ankle round, 12 m/s in one frame)
+            if p < duty: pos = pos + roll_offset(piv, fp)
+            else:
+                us = (p - duty) / (1 - duty)                      # only the first / last quarter of the swing
+                wgt = float(1 - smoothstep(us / 0.25)) if us < 0.5 else float(smoothstep((us - 0.75) / 0.25))
+                hold = float(periodic_curve(kn, pv, duty - 1e-9)) if us < 0.5 else float(periodic_curve(kn, pv, 0.0))
+                pos = pos + wgt * roll_offset(piv, hold)
+            feet['_pivot'][e['name']] = (piv['ball'] if fp > 0 else piv['heel']) if p < duty else None
+        feet[e['name']] = pos
     return feet
+
+
+def _path_foot(drv, e, tip, p, duty, path, ground, roll, kn, pv, tv, feet):
+    """One foot on a path measured from Kenshi's own clip (profiles._turns 'ankle_path', leg lengths against the root /
+    the rest ankle): planted in the stance (sliding back at the gait's speed, rolling about its heel / ball, which stay
+    put), the measured swing (heel kick, lift, reach) bent just enough to start and end where the stance does."""
+    L = drv.leg_len; nm = e['name']; piv = drv.pivots.get(nm)
+    rz = drv._Wr[drv.rig.b(drv.map['root'])][2, 3]
+    fp = float(periodic_curve(kn, pv, p)) if roll is not None else 0.0
+    ro = lambda pitch: roll_offset(piv, pitch) if (piv is not None and roll is not None) else np.zeros(3)
+    p_end = float(periodic_curve(kn, pv, duty - 1e-9)) if roll is not None else 0.0
+    p_beg = float(periodic_curve(kn, pv, 0.0)) if roll is not None else 0.0
+    # the measured ankle ends already include the foot's roll: the planted point slides from where the ankle starts
+    # minus its roll there to where it ends minus its roll there (that slide is the true ground speed)
+    z0 = rz + path['stance_z'][0] * L - ro(p_beg)[2]; z1 = rz + path['stance_z'][-1] * L - ro(p_end)[2]
+    def stance_at(u, pitch):
+        return np.array([tip[0], tip[1] + ground, z0 + (z1 - z0) * u]) + ro(pitch)
+    if roll is not None and piv is not None:
+        feet['_pitch'][nm] = fp; feet['_toe'][nm] = float(periodic_curve(kn, tv, p))
+    if p < duty:
+        if piv is not None and roll is not None: feet['_pivot'][nm] = piv['ball'] if fp > 0 else piv['heel']
+        return stance_at(p / duty, fp)
+    if roll is not None: feet['_pivot'][nm] = None
+    u = (p - duty) / (1 - duty)
+    meas = lambda uu: np.array([tip[0], tip[1] + _cr(path['swing_y'], uu) * L, rz + _cr(path['swing_z'], uu) * L])
+    d0 = stance_at(1.0, p_end) - meas(0.0); d1 = stance_at(0.0, p_beg) - meas(1.0)
+    sm = smoothstep(u)
+    return meas(u) + d0 * (1 - sm) + d1 * sm
 
 
 def standard_clips(drv, ground_wings='hidden'):
@@ -563,7 +692,8 @@ def standard_clips(drv, ground_wings='hidden'):
         return out
 
     def walker(stride, lift, duty, bob, pitch, lean_head, crouch, arm_amp=0.0, fore=0.0, vault=False, air=0.0,
-               ymax=0.0, slack=0.985, arm_bias=0.0, fore_amp=0.0, centre=0.0, all_legs=False, lift_peak=0.5, push_from=1.0):
+               ymax=0.0, slack=0.985, arm_bias=0.0, fore_amp=0.0, centre=0.0, all_legs=False, lift_peak=0.5, push_from=1.0,
+               turns=None, roll=None, hips=None, arms=None, path=None, ground=0.0):
         cache = {}
 
         def fn(t, T):
@@ -583,11 +713,24 @@ def standard_clips(drv, ground_wings='hidden'):
                 dil = np.array([ys[(k + win) % N].max() for k in range(N)])
                 cap = np.array([dil[(k + win) % N].min() for k in range(N)])   # fills narrow dips, keeps the peaks
                 cache[T] = np.minimum(sm, cap + HIP_MARGIN * drv.leg_len)
+                if hips is not None:
+                    # measured hip curve: where the reach limit is lower than the curve, take the shortfall over the
+                    # cycle, widen it (30 ms) and smooth it (20 ms), and lower the curve by that: a cap that bites becomes a
+                    # smooth dip instead of a kink (min(curve, reach) frame by frame cut corners into it)
+                    from .profiles import fourier_at
+                    yf = np.array([float(fourier_at(hips, k / N)) * drv.leg_len for k in range(N)])
+                    d = np.maximum(yf - ys, 0.0)
+                    w2 = max(2, int(0.03 / T * N)); win2 = np.arange(-w2, w2 + 1)
+                    dd = np.array([d[(k + win2) % N].max() for k in range(N)])
+                    sig2 = max(1.0, 0.02 / T * N); x2 = np.arange(-int(4 * sig2), int(4 * sig2) + 1)
+                    g2 = np.exp(-0.5 * (x2 / sig2) ** 2); g2 /= g2.sum()
+                    ds = np.array([float(np.dot(g2, dd[(k + x2) % N])) for k in range(N)])
+                    cache[T] = np.minimum(yf - ds, ys + 0.002 * drv.leg_len)   # never more than 2 mm past the reach
             tab = cache[T]; N = len(tab); f = (t / T % 1.0) * N; k0 = int(f) % N
             y = float(tab[k0] + (tab[(k0 + 1) % N] - tab[k0]) * (f - int(f)))
             feet = dict(sp['feet']); st = set(feet.get('_stance', ()))
             for nm in list(st):
-                one = drv.vault({'_stance': {nm}, nm: feet[nm]}, slack)
+                one = drv.vault({'_stance': {nm}, nm: feet[nm]}, slack, rot=sp.get('root_rot'))
                 if one is None or one < y - 1e-4: st.discard(nm)
             feet['_stance'] = st
             sp = dict(sp); sp['feet'] = feet; sp['root_offset'] = (sp['root_offset'][0], y, sp['root_offset'][2])
@@ -596,7 +739,12 @@ def standard_clips(drv, ground_wings='hidden'):
         def raw(t, T):
             ph = t / T
             w = 2 * np.pi * ph
-            feet = gait_feet(drv, ph, stride, lift, duty, centre=centre, lift_peak=lift_peak)
+            feet = gait_feet(drv, ph, stride, lift, duty, ground=ground, centre=centre, lift_peak=lift_peak, roll=roll, path=path)
+            rr = None
+            if turns is not None:                       # measured: the pelvis turns toward the leading leg, the chest
+                from .profiles import fourier_at          # turns against it, the head keeps looking ahead
+                tv = {pt: [fourier_at(turns[pt][a], ph) for a in ('pitch', 'yaw', 'roll')] for pt in ('pel', 'chest', 'head')}
+                rr = q_rotvec(tv['pel'])
             if vault:                                   # people: hips ride over the stance leg, a hop when no foot is down
                 vf = feet
                 if all_legs:                            # the swinging leg reaching for its next step counts too
@@ -606,11 +754,15 @@ def standard_clips(drv, ground_wings='hidden'):
                     for e, c in drv.legs:
                         pp = (ph + drv.phase[e['name']]) % 1.0
                         if pp < duty and pp / duty > push_from: vf['_stance'].discard(e['name'])
-                v = drv.vault(vf, slack)
-                if v is not None: y = min(v, ymax)
+                v = drv.vault(vf, slack, rot=rr)
+                if hips is not None:                    # measured: Kenshi's own hip height over the cycle; the reach
+                    from .profiles import fourier_at      # limit only caps it (and is counted when it does)
+                    y = float(fourier_at(hips, ph)) * drv.leg_len
+                    if v is not None and v < y: y = v; drv.hip_caps += 1
+                elif v is not None: y = min(v, ymax)
                 else:                                   # airborne: a small hop, never higher than the feet can follow
                     allf = dict(feet); allf['_stance'] = {e['name'] for e, c in drv.legs if e['name'] in feet}
-                    va = drv.vault(allf)
+                    va = drv.vault(allf, rot=rr)
                     y = ymax + air * H * np.sin(np.pi * ((ph * 2) % 1.0))
                     if va is not None: y = min(y, va)
             else:
@@ -620,11 +772,17 @@ def standard_clips(drv, ground_wings='hidden'):
             # back; arm_swing is + = back, so forward is the negative side (this sign was flipped: a straight arm
             # thrown forward, 'Forrest Gump')
             fb = {k: fore - fore_amp * (v - arm_bias) / max(arm_amp, 1e-6) for k, v in sw.items()}
-            return {'arm_swing': sw, 'forearm_bend': fb, 'root_offset': (0, y, 0),
-                    'body_rot': mx.q_mul(ax(X, pitch), ax(Z, 2.0 * np.sin(w))),
-                    'head_rot': ax(Y, lean_head * np.sin(w)),
-                    'abdomen_rot': [ax(Y, 4 * np.sin(w - 0.6)), ax(X, 2 * np.cos(2 * w))],
-                    'feet': feet, 'wings': gw}
+            sp = {'arm_swing': sw, 'forearm_bend': fb, 'root_offset': (0, y, 0),
+                  'body_rot': mx.q_mul(ax(X, pitch), ax(Z, 2.0 * np.sin(w))),
+                  'head_rot': ax(Y, lean_head * np.sin(w)),
+                  'abdomen_rot': [ax(Y, 4 * np.sin(w - 0.6)), ax(X, 2 * np.cos(2 * w))],
+                  'feet': feet, 'wings': gw}
+            if rr is not None:
+                sp.update(root_rot=rr, body_rot=q_rotvec(tv['chest']), head_rot=q_rotvec(tv['head']))
+            if arms is not None:
+                from .profiles import fourier_at
+                sp['arm_rel'] = {k: q_rotvec([fourier_at(v[a], ph) for a in ('pitch', 'yaw', 'roll')]) for k, v in arms.items()}
+            return sp
         return fn
 
     def hover(t, T):
@@ -715,6 +873,33 @@ def standard_clips(drv, ground_wings='hidden'):
                       # Kenshi's run plants a foot for ~15% of the stride, ours for 30%+ (the IK needs it): the second
                       # part of our stance is the toe push and no longer holds the hips down
                       push_from=min(1.0, max(0.3, float(g['duty']) / duty)) if (kind == 'run' and PUSH_ON) else 1.0)
+            if drv.plan == 'biped' and 'turns' not in g and 'turns_h1' in g:   # no local curves: the public summaries
+                from .profiles import roll_from_summary                          # (one sine per turn, our own foot roll)
+                g = dict(g, turns=g['turns_h1'])
+                if 'roll_summary' in g: g['foot_roll'] = roll_from_summary(g['roll_summary'])
+                if 'hips_h2' in g: g['pelvis_y'] = g['hips_h2']
+                if 'arms_h1' in g: g['arms'] = g['arms_h1']
+                # the summary's lift is Kenshi's whole ankle-height range, made on its own (longer) foot path; on our
+                # shorter one the heel came within 3 cm of hip height under the summary's hip curve and the knee rule
+                # clamped it (a 10 m/s snap): keep the heel a knee-fold below the hips
+                lift = min(lift, 0.8 * float(g['lift']) * L)
+            if drv.plan == 'biped' and 'turns' in g and TURNS_ON:
+                kw.update(turns=g['turns'])
+                pitch = float(g['turns']['pel']['pitch'][0] + g['turns']['chest']['pitch'][0])   # the chest's mean lean
+            if drv.plan == 'biped' and 'foot_roll' in g and ROLL_ON:
+                kw.update(roll=g['foot_roll'])
+                if 'pelvis_y' in g:                                 # rolling feet always reach: the shape comes from Kenshi
+                    kw.update(hips=g['pelvis_y'], slack=0.998)      # (its legs reached those hips: the cap is only a net)
+                kw.update(ground=float(g.get('ankle_sink', 0.0)) * L)   # the planted ankle sits a little low
+                if 'ankle_path' in g and PATH_ON:                   # and the feet follow Kenshi's own ankle path, at its
+                    ap = g['ankle_path']                            # stance share (so its speed, too)
+                    duty = float(g['foot_roll']['duty']); stride = (ap['stance_z'][0] - ap['stance_z'][-1]) * L
+                    pv_ = next(iter(drv.pivots.values()), None)     # the planted point's slide (see _path_foot)
+                    if pv_ is not None:
+                        kn_, pvv, _ = roll_knots(g['foot_roll'], duty)
+                        stride -= roll_offset(pv_, float(periodic_curve(kn_, pvv, 0.0)))[2] -                                   roll_offset(pv_, float(periodic_curve(kn_, pvv, duty - 1e-9)))[2]
+                    kw.update(path=ap, ground=float(g.get('ankle_sink', 0.0)) * L)
+            if drv.plan == 'biped' and 'arms' in g and ARMS_ON and drv.arms: kw.update(arms=g['arms'])
             if 'arm_deg' in g and drv.arms:
                 lo_, hi_ = g['arm_deg']; e0, e1 = g.get('elbow_deg', [10, 30])
                 kw.update(arm_amp=(hi_ - lo_) / 2, arm_bias=-(hi_ + lo_) / 2 - pitch, fore=(e0 + e1) / 2, fore_amp=(e1 - e0) / 2)

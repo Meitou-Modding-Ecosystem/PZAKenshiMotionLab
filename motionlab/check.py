@@ -3,16 +3,22 @@
 import numpy as np
 
 
+def _rx(deg):
+    a = np.radians(deg); c, s_ = np.cos(a), np.sin(a)
+    return np.array([[1, 0, 0], [0, c, -s_], [0, s_, c]])
+
+
 def foot_check(drv, cd, fps=30):
     """Per leg: worst IK miss (foot vs its target) and worst slip of a planted foot against the ground
     (in-place clip: a planted foot must move back at exactly the clip's speed)."""
     rig = drv.rig; drv.reset()
     n = max(2, int(round(cd.length * fps)))
-    miss, slip, planted = {}, {}, {}
+    miss, slip, planted = {}, {}, {}; switches = 0
     prev = None
     for k in range(2 * n if cd.loop else n + 1):        # a loop: the second pass; a one-shot: once, end included
         t = (k % n) / fps if cd.loop else min(k / fps, cd.length)
         spec = cd.fn(t, cd.length); q, tt, s, W = drv.pose(spec, dt=1 / fps)
+        dt = 1.0 / fps if (prev is None or cd.loop) else max(t - prev[4], 1e-6)   # a one-shot's last step is shorter
         feet = spec.get('feet', {}); st = feet.get('_stance', set()) if spec.get('fold', 0) <= 0 else set()
         cur = {e['name']: rig.chain_points(ch, W)[-1] for e, ch in drv.legs}
         if k >= n or not cd.loop:
@@ -21,11 +27,20 @@ def foot_check(drv, cd, fps=30):
                 if tg is not None and spec.get("fold", 0) <= 0 and nm in st:   # planted feet only (swing targets may be capped)
                     miss[nm] = max(miss.get(nm, 0.0), float(np.linalg.norm(cur[nm] - tg)))
                 if prev is not None and nm in st and nm in prev[1]:
-                    v = (cur[nm] - prev[0][nm]) * fps + np.array([0, 0, cd.speed])
+                    # a rolling foot (heel strike .. toe-off) is planted at its pivot, the heel or the ball, not the
+                    # ankle: measure that point in both frames (with each frame's own foot pitch)
+                    d = feet.get('_pivot', {}).get(nm); dp = prev[3].get(nm)
+                    if (d is None) != (dp is None) or (d is not None and not np.allclose(d, dp)):
+                        switches += 1; continue                  # heel -> ball: the foot is flat between the frames
+                    if d is not None:
+                        at = lambda ank, pf: ank + _rx(pf.get(nm, 0.0)) @ np.asarray(d, float)
+                        v = (at(cur[nm], feet.get('_pitch', {})) - at(prev[0][nm], prev[2])) / dt + np.array([0, 0, cd.speed])
+                    else:
+                        v = (cur[nm] - prev[0][nm]) / dt + np.array([0, 0, cd.speed])
                     slip[nm] = max(slip.get(nm, 0.0), float(np.linalg.norm(v)))
                     planted[nm] = planted.get(nm, 0) + 1
-        prev = (cur, st)
-    return {'ik_miss_m': miss, 'slip_m_per_s': slip, 'planted_frames': planted}
+        prev = (cur, st, dict(feet.get('_pitch', {})), dict(feet.get('_pivot', {})), t)
+    return {'ik_miss_m': miss, 'slip_m_per_s': slip, 'planted_frames': planted, 'pivot_switches': switches}
 
 
 def move_check(drv, cd, fps=30):

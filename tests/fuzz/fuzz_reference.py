@@ -22,6 +22,15 @@ td = tempfile.mkdtemp(); base = os.path.join(td, 'ref.glb'); gltf.write_glb(base
 good = open(base, 'rb').read()
 cur = curves.extract(base, fps=15)                      # the unmutated file reads
 assert all(np.isfinite(v).all() for k, v in cur.items() if isinstance(v, np.ndarray))
+# crafted: a clip just over the 600 s limit, and one with a broken time, must be refused (not read and sampled)
+for label, scale in (('700 s clip (limit 600)', 700.0 / max(clip.times[-1], 1e-9)), ('NaN time', float('nan'))):
+    bad = copy.copy(clip); bad.times = np.array(clip.times, float) * scale
+    bp = os.path.join(td, 'crafted.glb'); gltf.write_glb(bp, ref, [bad])
+    try:
+        curves.extract(bp, fps=15); print('FAIL: crafted %s was read' % label); sys.exit(1)
+    except (ValueError, gltf.GlbError, KeyError, IndexError, TypeError, OverflowError):
+        pass
+print('crafted cases: PASS')
 rng = random.Random(4321)
 ok_rejects = (gltf.GlbError, ValueError, KeyError, IndexError, TypeError, struct.error, json.JSONDecodeError,
               UnicodeDecodeError, OverflowError, AttributeError, ZeroDivisionError)

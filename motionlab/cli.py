@@ -2,6 +2,7 @@
 #   python -m motionlab rig   <model.glb | model.mesh> -o <out folder> [--gifs] [--landmarks edited.json]
 #   python -m motionlab view  <rigged.glb> [--clip walk] -o <file.gif>
 #   python -m motionlab info  <model.glb | model.mesh>
+#   python -m motionlab studio <model.glb | model.mesh> [--against <Kenshi .skeleton>] -o <out folder>
 import argparse, json, os, sys, time
 import numpy as np
 
@@ -44,6 +45,13 @@ def cmd_info(a):
         rc = read_clips(a.model); print('clips:', ', '.join(rc) or 'none')
 
 
+def cmd_studio(a):
+    from . import studio
+    m = _load(a.model, a.skeleton)
+    if m.skeleton is None: sys.exit('no skeleton in %s (give --skeleton)' % a.model)
+    studio.build(m, a.out, against=a.against, clips=tuple(c.strip() for c in a.clips.split(',') if c.strip()), gifs=not a.no_gifs)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog='motionlab', description="PZA's Kenshi Motion Lab: rig and animate models from code")
     sub = ap.add_subparsers(dest='cmd', required=True)
@@ -68,8 +76,13 @@ def main(argv=None):
     v.add_argument('--yaw', type=float, default=38.0, help='camera angle around the model (90 = side)'); v.add_argument('--pitch', type=float, default=14.0)
     i = sub.add_parser('info', help='what a model holds (bones, weights, clips)')
     i.add_argument('model'); i.add_argument('--skeleton')
+    st = sub.add_parser('studio', help='a local page: our walk / run next to a reference, curves and a scorecard')
+    st.add_argument('model'); st.add_argument('-o', '--out', required=True); st.add_argument('--skeleton')
+    st.add_argument('--against', help="a Kenshi .skeleton with this body's walk / run clips (pictures and curves); "
+                                      "without it the scorecard uses the numbers measured from Kenshi's clips")
+    st.add_argument('--clips', default='walk,run'); st.add_argument('--no-gifs', action='store_true')
     a = ap.parse_args(argv)
-    {'rig': cmd_rig, 'view': cmd_view, 'info': cmd_info}[a.cmd](a)
+    {'rig': cmd_rig, 'view': cmd_view, 'info': cmd_info, 'studio': cmd_studio}[a.cmd](a)
 
 
 if __name__ == '__main__':

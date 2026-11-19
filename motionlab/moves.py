@@ -340,7 +340,10 @@ def moving_jumps(drv, gaits):
             x = t - t_ld; fade = 1 - np.clip((t - (length - 0.12)) / 0.12, 0, 1) ** 2   # gone by the last frame
             return v_land * x * np.exp(-x / tau_c) * fade
 
-        def fn(t, _T, base=base, ts=ts, ph=ph, t_to=t_to, t_ld=t_ld, h0=h0, P=P, T=T, x_up=x_up, extra=extra):
+        x_up_u = x_up
+        while x_up_u < ph_to - 1e-9: x_up_u += 1.0
+
+        def fn(t, _T, base=base, ts=ts, ph=ph, t_to=t_to, t_ld=t_ld, h0=h0, P=P, T=T, x_up_u=x_up_u, extra=extra):
             p = float(np.interp(t, ts, ph)); bt = (p % 1.0) * T
             sp = base.fn(bt, T)
             sp = dict(sp); feet = dict(sp['feet']); feet['_stance'] = set(feet.get('_stance', ()))
@@ -350,18 +353,20 @@ def moving_jumps(drv, gaits):
                 arc = max(0.0, body - h0 * (1 - u))     # the feet follow the body up, from where they left the ground
                 feet['_stance'] = set()                 # nothing is on the ground in the air
             # X is still 'planted' in the base cycle for a moment after take-off: lift it off behind
+            # (in the UNWRAPPED phase: X's first lift-off after take-off; comparing the wrapped phase switched the lift
+            # on again mid-flight when the cycle wrapped round, a 14 cm jump of the foot in one frame)
             lift_x = 0.0
-            if t > t_to and (p % 1.0) < x_up and t < t_ld + 0.2:
-                lift_x = 0.10 * H * ease((t - t_to) / 0.08) * (1 - ease((p % 1.0 - (x_up - 0.08)) / 0.08))
+            if t > t_to and p < x_up_u and t < t_ld + 0.2:          # eased out before the cut-off, too (a long
+                lift_x = 0.10 * H * ease((t - t_to) / 0.08) * (1 - ease((p - (x_up_u - 0.08)) / 0.08))                          * (1 - ease((t - (t_ld + 0.12)) / 0.08))        # stance kept X 'planted' past it: a 16 cm drop)
                 feet['_stance'].discard(X)
             for nm in list(feet):
-                if nm == '_stance' or feet[nm] is None: continue
+                if nm.startswith('_') or feet[nm] is None: continue
                 f = np.array(feet[nm], float); f[1] += arc + (lift_x if nm == X else 0.0); feet[nm] = f
             # a planted foot the pushing / dipping body can no longer reach is on its toes: it leaves the stance
             ro = np.array(sp.get('root_offset', (0, 0, 0)), float); sp_y = ro[1]; ro[1] += body
             if body > 1e-6:                             # only where this jump raised the hips above the gait's own:
                 for nm in list(feet['_stance']):        # a foot the gait could reach but the raised hips can't
-                    one = drv.vault({'_stance': {nm}, nm: feet[nm]})
+                    one = drv.vault({'_stance': {nm}, nm: feet[nm]}, rot=sp.get('root_rot'))
                     if one is None or one < ro[1] - 1e-4: feet['_stance'].discard(nm)
             sp['root_offset'] = tuple(ro); sp['feet'] = feet
             sw = sp.get('arm_swing', {})

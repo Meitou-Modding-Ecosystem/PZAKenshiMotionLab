@@ -38,8 +38,40 @@ for plan in ('biped', 'quadruped'):
         for k in ('pelvis_drop', 'knee_deg', 'arm_deg', 'elbow_deg'):
             v = [x[k] for x in ks if k in x]
             if v: m[k] = [float(np.median([a[0] for a in v])), float(np.median([a[1] for a in v]))]
+        # curves: element-wise medians over PEOPLE only (other two-legged skeletons move differently)
+        kp = [p[kind] for p in ps if kind in p and p['source'].lower().endswith('_skeleton.skeleton')] or ks
+        tw = [x['turns'] for x in kp if 'turns' in x]
+        if tw: m['turns'] = {pt: {a: [float(v) for v in np.median([x[pt][a] for x in tw], axis=0)] for a in tw[0][pt]} for pt in tw[0]}
+        am = [x['arms'] for x in kp if 'arms' in x]
+        if am: m['arms'] = {pt: {a: [float(v) for v in np.median([x[pt][a] for x in am if pt in x], axis=0)] for a in am[0][pt]} for pt in am[0]}
+        v = [x['ankle_sink'] for x in kp if 'ankle_sink' in x]
+        if v: m['ankle_sink'] = float(np.median(v))
+        ap = [x['ankle_path'] for x in kp if 'ankle_path' in x]
+        if ap: m['ankle_path'] = {k: [float(v) for v in np.median([x[k] for x in ap], axis=0)] for k in ap[0]}
+        v = [x['ankle_z'] for x in kp if 'ankle_z' in x]
+        if v: m['ankle_z'] = [float(np.median([a[0] for a in v])), float(np.median([a[1] for a in v]))]
+        py = [x['pelvis_y'] for x in kp if 'pelvis_y' in x]
+        if py: m['pelvis_y'] = [float(v) for v in np.median(py, axis=0)]
+        sc = [x['scorecard'] for x in kp if 'scorecard' in x]
+        if sc: m['scorecard'] = {k: float(np.median([x[k] for x in sc if k in x])) for k in sc[0]}
+        fr = [x['foot_roll'] for x in kp if 'foot_roll' in x]
+        if fr: m['foot_roll'] = {k: (float(np.median([x[k] for x in fr])) if k == 'duty' else
+                                     [float(v) for v in np.median([x[k] for x in fr], axis=0)]) for k in fr[0]}
         med[kind] = m
     out['median'][plan] = med
+# curves (how the pelvis / chest / head / arms turn, the feet roll, the ankle's path) rebuild Kenshi's own motion almost
+# exactly: they are animation data, so they go to a LOCAL file (git-ignored, never in the add-on zip) made from your
+# own Kenshi install; the public file keeps only the summary numbers
+curves = {'note': 'LOCAL ONLY: curves measured from your own Kenshi install (tools/build_gait_profiles.py). Never '
+                  'commit or share this file.', 'skeletons': {}, 'median': {}}
+for grp in ('skeletons', 'median'):
+    for key, p in out[grp].items():
+        for kind in ('walk', 'run'):
+            if kind not in p: continue
+            profiles.add_summaries(p[kind])            # the public file keeps lossy summaries the fallback gait uses
+            c = {k: p[kind].pop(k) for k in profiles.CURVE_KEYS if k in p[kind]}
+            if c: curves[grp].setdefault(key, {})[kind] = c
 os.makedirs(os.path.dirname(profiles.DATA), exist_ok=True)
 with open(profiles.DATA, 'w', encoding='utf-8') as f: json.dump(out, f, indent=1)
-print('wrote', profiles.DATA, '(%d skeletons)' % len(out['skeletons']))
+with open(profiles.CURVES, 'w', encoding='utf-8') as f: json.dump(curves, f, indent=1)
+print('wrote', profiles.DATA, '(%d skeletons, summary numbers) and the LOCAL curves' % len(out['skeletons']), profiles.CURVES)

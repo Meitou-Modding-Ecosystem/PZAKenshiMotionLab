@@ -30,6 +30,40 @@ animation data). A model on one of those skeletons moves by its own numbers; oth
 ours now comes out at: knee 8-83 degrees (Kenshi 12-73), pelvis 0.93-0.97 m (0.92-0.97), arm swing -23 / +24 degrees
 (-21 / +24). Four-legged animals are close but not exact yet (the dog walks a little lower than Kenshi's).
 
+**Natural walk and run (2026-11-19).** The old walk and run looked machine-made, and the numbers said why: the
+pelvis never turned, the feet never rolled (0 degrees, against Kenshi's 15-42 and ~90), and the hip height was built
+from reach limits (40% of its motion in sharp corners, Kenshi's 3%). People now:
+- turn the pelvis toward the leading leg, turn the chest against it and keep the head looking ahead;
+- roll each foot heel strike -> flat -> toe-off about the heel and the ball, which stay planted (the toes bend at
+  push-off);
+- ride the hips on a smooth double bounce, with the reach limit only a safety net that dips smoothly when it bites;
+- move the shoulders and swing the arms across the body.
+
+Two levels:
+1. **Public (this repo):** lossy summaries in `kenshi_gaits.json` (the mean and one sine per body turn, the hips'
+   second harmonic, four numbers of the foot roll) drive our own shapes. Nothing in the repo rebuilds Kenshi's clips.
+2. **With your own Kenshi install:** `python tools/build_gait_profiles.py "<Kenshi>/data"` also writes
+   `motionlab/data/kenshi_curves.json`: curves measured from Kenshi's walk / run (body turns, arms, foot roll, the
+   ankle's path). They rebuild Kenshi's motion almost exactly, so they are **animation data: the file is git-ignored,
+   never in the add-on zip; never share it.** With it, our walk / run match Kenshi's on every Studio number. A damaged
+   file is checked on load (wrong shapes or numbers are dropped and the summary gait is used).
+
+**Motion Lab Studio: see how natural a clip moves.**
+
+```bash
+python -m motionlab studio "<Kenshi>/data/character/meshes/human/human_male.mesh" --skeleton "<Kenshi>/data/character/meshes/male_skeleton/male_skeleton.skeleton" --against "<Kenshi>/data/character/meshes/male_skeleton/male_skeleton.skeleton" -o out/studio
+```
+
+`out/studio/studio.html` shows, for the walk and run:
+- ours and Kenshi's on the same body side by side, lined up by phase;
+- our curves over Kenshi's (pelvis height / yaw / roll, chest counter-turn, foot roll, head height, arm swing, elbow);
+- a scorecard graded green / amber / red: pelvis turn and roll, chest counter-turn, foot roll, chest lean, arm swing,
+  elbow, hip bob, head bob, hip-height corners, jerk, ground speed.
+
+Without `--against` it grades against the numbers in `kenshi_gaits.json` (no pictures of Kenshi's clips). A page made
+with `--against` holds pictures of Kenshi's own animation: keep it to yourself. `tests/test_naturalness.py` holds the
+same numbers as gates, so a change that looks better on one clip can't quietly break another.
+
 **Retarget a reference clip onto a Kenshi body (`--reference`).** Give the rig command (or the add-on's *Reference
 clips* folder) skeleton-only reference clips, e.g. Mixamo downloads you converted with `tools/fbx_to_glb.py`, and each
 becomes a clip `ref_<file name>` on the body's OWN Kenshi skeleton. `motionlab/curves.py` reads the reference frame by
@@ -204,7 +238,11 @@ blender -b --factory-startup --python tools/blender_check.py -- out/my_creature/
   used to flip from behind to in front in one frame); the swing leaves and lands at part of the ground speed; a
   kneeling knee keeps where the leg put it and, where the hips are too low for the thigh, the body is lifted
   instead of the knee flipping sides; the stomach get-up's hands-and-knees hips sit one thigh length up.
-- The run, side by side with Kenshi's own on the same body: the elbow bends most as the arm comes FORWARD (fist up
+- **Ground speed (open):** with the measured curves, our run's planted foot slides at 8.3 m/s (male) / 8.2 (female),
+  Kenshi's ankle at 6.6 / 6.4. Our heel and ball stay exactly planted while the foot rolls 70 degrees onto its toes;
+  Kenshi's ankle number does not count that roll. Which one the game's run speed matches is unchecked until the clip
+  plays in Kenshi (the Studio shows it amber for the female run).
+- (Before the 2026-11-19 natural walk / run, kept for the history:) The run, side by side with Kenshi's own on the same body: the elbow bends most as the arm comes FORWARD (fist up
   by the chest; a flipped sign threw a straight arm forward), the chest leans 20 degrees, the heel kicks highest 35%
   into the swing (behind the body) and comes through low, and the back foot only pushes off in the second half of
   its stance (Kenshi plants it for ~15% of the stride, ours for 30%) instead of dragging the hips down. Moves that travel
@@ -244,6 +282,21 @@ python tests/test_curves.py
 ```bash
 python tests/fuzz/fuzz_reference.py 300
 ```
+
+```bash
+python tests/test_naturalness.py
+```
+
+```bash
+python tests/fuzz/fuzz_curves.py 150
+```
+
+```bash
+python tests/fuzz/mutate.py
+```
+
+`mutate.py` plants known bugs in a scratch copy and checks the fuzzers catch each one. Set `MOTIONLAB_NO_CURVES=1` to
+run any test the way CI and the public add-on see it (without your local curves file).
 
 The Blender add-on has a headless test (`tests/blender/test_addon.py`, run it with `BLENDER_USER_RESOURCES` pointing at
 an empty folder so it never touches your own Blender setup).
