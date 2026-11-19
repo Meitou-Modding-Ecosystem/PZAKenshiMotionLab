@@ -21,7 +21,7 @@ names = [c.name for c in motion.standard_clips(drv)]
 MOVES = ['knockdown_back', 'knockdown_front', 'getup_back', 'getup_front', 'roll_forward', 'roll_dive',
          'jump_up', 'jump_forward', 'jump_down', 'land_soft', 'land_hard']
 STRIDE = ['jump_walk', 'jump_run']
-ok(names == ['idle', 'walk', 'run'] + MOVES + STRIDE, 'clips for a person: %s' % names)
+ok(names == ['idle', 'walk', 'run'] + MOVES + STRIDE + ['hip_thrust'], 'clips for a person: %s' % names)
 for cd in motion.standard_clips(drv):
     if cd.name in MOVES: continue                     # (gaits and in-stride jumps: feet planted, no slip)
     ck = check.foot_check(drv, cd)
@@ -95,7 +95,7 @@ back = gltf.load_glb(r['glb'])
 ok(r['own_rig'] and r['plan'] == 'biped', 'pipeline kept the own rig')
 ok(back.skeleton.names == m.skeleton.names, 'bones unchanged (%d)' % len(back.skeleton))
 ok(float(np.abs(back.verts - m.verts).max()) < 1e-5, 'geometry unchanged')
-ok(sorted(gltf.read_clips(r['glb'])) == sorted(['idle', 'run', 'walk'] + MOVES + STRIDE), 'clips in the file')
+ok(sorted(gltf.read_clips(r['glb'])) == sorted(['idle', 'run', 'walk'] + MOVES + STRIDE + ['hip_thrust']), 'clips in the file')
 # the walk moves the legs and swings the arms
 rc = gltf.read_clips(r['glb'])['walk']
 ok('Bip01 L UpperArm' in rc and np.ptp(rc['Bip01 L UpperArm']['rotation'], axis=0).max() > 0.05, 'arms swing in the walk')

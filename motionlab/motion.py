@@ -750,9 +750,10 @@ def standard_clips(drv, ground_wings='hidden'):
         ClipDef('sting', 1.2, sting, False, 0.0, 'sting: wind-up, fast jab with the abdomen swung under and forward, recover'),
     ]
     if drv.plan == 'biped':                     # knockdowns and get-ups (motionlab/moves.py)
-        from .moves import biped_moves, moving_jumps
+        from .moves import biped_moves, moving_jumps, dance_moves
         clips += biped_moves(drv)
         clips += moving_jumps(drv, {c.name: c for c in clips})
+        clips += dance_moves(drv)
     return [c for c in clips if clip_fits(drv, c.name)]
 
 

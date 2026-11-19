@@ -190,7 +190,7 @@ blender -b --factory-startup --python tools/blender_check.py -- out/my_creature/
   the game is next.
 - Whether Kenshi plays bone *scale* keys (the wing shrink) is unknown: `--ground-wings folded` is the fallback.
 - People: idle, walk, run, two knockdowns, two get-ups, two forward rolls, jumps (up, forward, down from a 1.22 m
-  ledge) and landings (soft, hard); no combat moves yet. Jump flights use real gravity (metres). Kenshi has no jump
+  ledge), landings (soft, hard) and one dance for fun (`hip_thrust`, 110 BPM loop); no combat moves yet. Jump flights use real gravity (metres). Kenshi has no jump
   of its own: these clips are for mods that add one (Meitou, Part B). The preview draws no ledge under jump_down.
 - **Quick jumps on the move (`jump_walk`, `jump_run`):** no crouch: the planted foot pushes off 0.10 s into the clip,
   the body flies 0.30 s (walk) / 0.38 s (run) with the legs held in their split, lands on the other foot and carries

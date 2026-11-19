@@ -373,3 +373,38 @@ def moving_jumps(drv, gaits):
                            '(rises %.0f cm), lands on the other foot and carries on; starts and ends on the same %s frame'
                            % (gname, PUSH, air, rise * 100, gname)))
     return out
+
+
+DANCE_BPM = 110.0                       # hip_thrust: one thrust per beat, 8 beats per loop
+
+
+def dance_moves(drv):
+    """A just-for-fun dance for people: hip thrusts on the beat. Wide stance with both feet planted; the hips push
+    out and tip back while the chest and head lean further back a little later, the hands start beside the hips and
+    swing back about 40 deg on each push, and the body sways side to side every 4 beats. Built only from smooth sine
+    waves with per-part lag (no corners), so it loops cleanly."""
+    r = drv.rig; H = r.height; beat = 60.0 / DANCE_BPM
+    X, Y, Z = [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]
+    ax = lambda a, d: mx.q_axis_angle(a, np.radians(d))
+    feet = {'_stance': set()}
+    for e, c in drv.legs:
+        tip = drv.rest_tip[e['name']].copy(); tip[0] *= 1.9          # wide stance
+        feet[e['name']] = tip; feet['_stance'].add(e['name'])
+
+    def fn(t, T):
+        w = 2 * np.pi * t / beat
+        wave = lambda lag: np.sin(w - lag)
+        hip = 0.75 * wave(0.0) + 0.25                                 # forward-biased: a long push out, a short pull back
+        chest = 0.75 * wave(0.30) + 0.25                              # the chest follows the hips a little late,
+        head = 0.75 * wave(0.60) + 0.25                               # the head later still,
+        arm = 0.5 + 0.5 * wave(0.75)                                  # the arms latest (0 = by the hips, 1 = swung back)
+        sway = np.sin(w / 4)
+        return {'feet': feet,
+                'root_offset': (0.05 * H * sway, -0.12 * H - 0.02 * H * (1 - np.cos(2 * w)) / 2, 0.14 * H * hip),
+                'root_rot': mx.q_mul(ax(Y, 12 * sway), ax(X, -22 * hip)),         # (+X leans forward) pelvis tips back
+                'body_rot': mx.q_mul(ax(X, -30 * chest - 4), ax(Z, 5 * sway)),    # chest leans further back on the push
+                'head_rot': mx.q_mul(ax(X, 14 * head + 2), ax(Y, -8 * sway)),     # head back with the chest, a little less
+                'arm_swing': {sd: 8 + 40 * (0.5 + 0.5 * np.sin(w - 0.75 - (0.12 if sd == 'R' else 0.0))) for sd in ('L', 'R')},
+                'forearm_bend': {sd: 14 + 10 * arm for sd in ('L', 'R')}}
+    return [ClipDef('hip_thrust', 8 * beat, fn, True, 0.0,
+                    'dance: hip thrusts at %.0f BPM, chest and head lean back, hands swing back, side sway' % DANCE_BPM)]
