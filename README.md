@@ -18,7 +18,7 @@ Two ways in:
   the same `Bip01 ...` bone names) **keeps its own skeleton and skin**. The Motion Lab recognises legs, arms, tail, ears
   and jaw by their names and adds the motion: people get idle, walk and run (arms swing) plus **knocked down onto the
   back / onto the stomach, getting up from each, a forward roll, a dive roll, a standing jump, a long jump, a jump
-  down from a ledge and two landings**; four-legged animals get idle, walk, run (a trot) and a bite.
+  down from a ledge, two landings and a quick jump in stride from the walk or run**; four-legged animals get idle, walk, run (a trot) and a bite.
 - **A model with no rig, or a rig it does not know** (a Meshy export), is **auto-rigged** from its shape. Today that
   auto-rig knows insect-like bodies (legs, wings, antennae, abdomen); more body plans later.
 
@@ -191,7 +191,14 @@ blender -b --factory-startup --python tools/blender_check.py -- out/my_creature/
 - Whether Kenshi plays bone *scale* keys (the wing shrink) is unknown: `--ground-wings folded` is the fallback.
 - People: idle, walk, run, two knockdowns, two get-ups, two forward rolls, jumps (up, forward, down from a 1.22 m
   ledge) and landings (soft, hard); no combat moves yet. Jump flights use real gravity (metres). Kenshi has no jump
-  of its own: these clips are for mods that add one (Meitou, Part B). The preview draws no ledge under jump_down. Moves that travel
+  of its own: these clips are for mods that add one (Meitou, Part B). The preview draws no ledge under jump_down.
+- **Quick jumps on the move (`jump_walk`, `jump_run`):** no crouch: the planted foot pushes off 0.10 s into the clip,
+  the body flies 0.30 s (walk) / 0.38 s (run) with the legs held in their split, lands on the other foot and carries
+  on at the gait's speed. Each starts and ends on the same frame of our walk / run (which match Kenshi's measured
+  gaits), so it blends in and out. A whole jump cannot fit in 300 ms: that much air time only lifts the body ~11 cm.
+- Smoothness rule (tested): the hips never change speed by more than 1 m/s from one 1/60 s frame to the next in the
+  walk, run and in-stride jumps. The run used to sag and snap back at each toe-off (6 m/s in one frame); the hip
+  height is now smoothed round the cycle and a foot the hips can no longer reach comes off its toes. Moves that travel
   (knockdowns, rolls) carry the distance in the root bone; whether Kenshi wants that or an in-place clip is untested. Four-legged animals: idle, walk, run
   and a bite. The knockdowns end in one fixed lying pose; Kenshi's ragdoll and its own get-up timing are not matched.
 

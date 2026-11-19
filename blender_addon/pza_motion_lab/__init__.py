@@ -18,7 +18,7 @@ bl_info = {"name": "PZA's Kenshi Motion Lab", "author": "PZA", "version": (0, 1,
 
 CLIPS = ('idle', 'walk', 'run', 'hover', 'takeoff', 'land', 'attack', 'sting',
          'knockdown_back', 'knockdown_front', 'getup_back', 'getup_front', 'roll_forward', 'roll_dive',
-         'jump_up', 'jump_forward', 'jump_down', 'land_soft', 'land_hard')
+         'jump_up', 'jump_forward', 'jump_down', 'land_soft', 'land_hard', 'jump_walk', 'jump_run')
 MARKERS = 'Motion Lab markers'
 
 

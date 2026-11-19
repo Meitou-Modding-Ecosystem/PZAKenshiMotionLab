@@ -10,8 +10,8 @@ def foot_check(drv, cd, fps=30):
     n = max(2, int(round(cd.length * fps)))
     miss, slip, planted = {}, {}, {}
     prev = None
-    for k in range(2 * n):
-        t = (k % n) / fps if cd.loop else min(k, n) / fps
+    for k in range(2 * n if cd.loop else n + 1):        # a loop: the second pass; a one-shot: once, end included
+        t = (k % n) / fps if cd.loop else min(k / fps, cd.length)
         spec = cd.fn(t, cd.length); q, tt, s, W = drv.pose(spec, dt=1 / fps)
         feet = spec.get('feet', {}); st = feet.get('_stance', set()) if spec.get('fold', 0) <= 0 else set()
         cur = {e['name']: rig.chain_points(ch, W)[-1] for e, ch in drv.legs}

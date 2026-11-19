@@ -29,7 +29,7 @@ ok(arm is not None and len(arm.data.bones) == n_src and 'Bip01 L Thigh' in arm.d
 clips = json.loads(arm['motionlab_clips']) if arm else []
 import os
 want = ['idle', 'walk', 'run', 'knockdown_back', 'knockdown_front', 'getup_back', 'getup_front', 'roll_forward', 'roll_dive',
-        'jump_up', 'jump_forward', 'jump_down', 'land_soft', 'land_hard']
+        'jump_up', 'jump_forward', 'jump_down', 'land_soft', 'land_hard', 'jump_walk', 'jump_run']
 want += ['ref_' + os.path.splitext(f)[0] for f in sorted(os.listdir(ref_dir)) if f.lower().endswith('.glb')] if ref_dir else []
 ok(clips == want, 'clips for a person: %s' % clips)
 ok(arm.get('motionlab_plan') == 'biped', 'plan: %s' % arm.get('motionlab_plan'))

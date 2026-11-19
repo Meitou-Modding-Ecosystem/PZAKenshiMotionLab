@@ -48,6 +48,19 @@ class Track:
                 e = per.get(ch, per.get('*', 'smooth'))
                 self.m0[k][c], self.m1[k][c] = {'fall': (0.0, 2 * d[k][c]), 'out': (2 * d[k][c], 0.0),
                                                 'lin': (d[k][c], d[k][c])}.get(e, (m[k][c], m[k + 1][c]))
+        # 'into': a segment ends at the speed the next one starts with (a push straight into the flight);
+        # 'carry': a segment starts at the speed the last one ended with (a landing keeps falling into the bend).
+        # Capped at 3x the segment's own slope, the most a monotone cubic takes without overshooting.
+        def cap(v, dd): return 0.0 if dd == 0 or v * dd <= 0 else float(np.sign(dd) * min(abs(v), 3 * abs(dd)))
+        for k in range(n - 1):
+            ease = self.keys[k + 1][2]
+            per = ease if isinstance(ease, dict) else {'*': ease}
+            for c, ch in enumerate(KEYS):
+                e = per.get(ch, per.get('*', 'smooth'))
+                if e == 'carry':
+                    self.m0[k][c] = cap(self.m1[k - 1][c], d[k][c]) if k > 0 else 0.0; self.m1[k][c] = 0.0
+                elif e == 'into':
+                    self.m1[k][c] = cap(self.m0[k + 1][c], d[k][c]) if k + 1 < n - 1 else 0.0
         self.h = h
 
     def at(self, t):
@@ -202,11 +215,11 @@ def biped_moves(drv):
         lead = 0.12 * H0 if trav else 0.0              # the feet reach ahead of the body to land
         return [(0.0, st(), 'lin'),
                 (J['crouch_t'], st(py=J['crouch'] * H0, th=22 if trav else 16, spine=10, arm=45, fore=20, head=-8), 'smooth'),
-                (t0, st(py=y_to, pz=0.12 * trav, th=10 if trav else 3, arm=-150, fore=12, head=0), 'smooth'),
+                (t0, st(py=y_to, pz=0.12 * trav, th=10 if trav else 3, arm=-150, fore=12, head=0), {'py': 'into', 'pz': 'into', '*': 'smooth'}),
                 (t0 + T / 2, st(py=y_to + rise, pz=0.12 * trav + 0.5 * (0.76 * trav), th=5, air=1.0, tk=0.6, fa=trav,
                                 arm=-120, fore=25, spine=-4), {'fa': 'fall', **air_ease}),
                 (td, st(py=1.0 * H0, pz=0.88 * trav - lead, th=-4 if trav else 0, fa=trav, arm=-70, fore=25), fall_ease),
-                (td + J['dip_after'], st(py=J['dip'] * H0, pz=trav - 0.3 * lead, th=20, spine=12, fa=trav, arm=-40, fore=35, head=-6), 'out'),
+                (td + J['dip_after'], st(py=J['dip'] * H0, pz=trav - 0.3 * lead, th=20, spine=12, fa=trav, arm=-40, fore=35, head=-6), {'py': 'carry', 'pz': 'carry', '*': 'out'}),
                 (td + J['up_after'], st(pz=trav, fa=trav), 'smooth'),
                 (td + J['up_after'] + 0.25, st(pz=trav, fa=trav), 'lin')]
 
@@ -217,7 +230,7 @@ def biped_moves(drv):
                 (0.45, st(py=H0 + h - 0.07 * H0, pz=0.3 * step, fh=h, th=8, arm=-20, fore=20, head=-12), 'smooth'),
                 (t_leave, st(py=H0 + h - 0.02 * H0, pz=step, fh=0.0, fa=ztd, air=1.0, tk=0.3, th=4, arm=-60, fore=25, head=-15), 'smooth'),
                 (td, st(py=H0, pz=ztd - 0.08 * H0, fa=ztd, th=-2, arm=-90, fore=25, head=-10), {'py': 'fall', 'pz': 'lin', '*': 'smooth'}),
-                (td + 0.27, st(py=0.5 * H0, pz=ztd, fa=ztd, th=28, spine=15, arm=-45, fore=40, head=-5), 'out'),
+                (td + 0.27, st(py=0.5 * H0, pz=ztd, fa=ztd, th=28, spine=15, arm=-45, fore=40, head=-5), {'py': 'carry', 'pz': 'carry', '*': 'out'}),
                 (td + 0.77, st(pz=ztd, fa=ztd), 'smooth'),
                 (td + 1.0, st(pz=ztd, fa=ztd), 'lin')]
 
@@ -226,11 +239,11 @@ def biped_moves(drv):
         k = [(0.0, st(py=top, air=1.0, tk=0.3, arm=-100 if hard else -55, fore=30, th=3, head=-10), 'lin'),
              (td, st(py=H0, arm=-80 if hard else -60, fore=25, head=-8), 'fall')]
         if hard:                                       # a deep crouch, a hand down, a moment before standing
-            k += [(td + L_['dip_after'], st(py=0.86 * L_['dip'] * H0, th=64, spine=30, hw=1.0, hz=0.15, hx=0.2, arm=-60, fore=30, head=-12), 'out'),
+            k += [(td + L_['dip_after'], st(py=0.86 * L_['dip'] * H0, th=64, spine=30, hw=1.0, hz=0.15, hx=0.2, arm=-60, fore=30, head=-12), {'py': 'carry', '*': 'out'}),
                   (td + L_['dip_after'] + L_['hold'], st(py=0.92 * L_['dip'] * H0, th=60, spine=28, hw=1.0, hz=0.12, hx=0.2, arm=-55, fore=30, head=0), 'smooth'),
                   (td + L_['up_after'], st(), 'smooth')]
         else:
-            k += [(td + L_['dip_after'], st(py=L_['dip'] * H0, th=16, spine=10, arm=-30, fore=30, head=-5), 'out'),
+            k += [(td + L_['dip_after'], st(py=L_['dip'] * H0, th=16, spine=10, arm=-30, fore=30, head=-5), {'py': 'carry', '*': 'out'}),
                   (td + L_['up_after'], st(), 'smooth')]
         k.append((k[-1][0] + 0.25, st(), 'lin'))
         return k
@@ -250,4 +263,109 @@ def biped_moves(drv):
         tr = Track(keys)
         length = tr.keys[-1][0] + max(LAG.values()) + 0.1      # the trailing parts settle before the clip ends
         out.append(ClipDef(name, length, (lambda tr: (lambda t, T: spec_from(lambda lag: tr.at(t - lag))))(tr), False, 0.0, note))
+    return out
+
+
+# ------------------------------------------------------------------ jumps on the move
+# A jump taken in stride from the walk or run, with no crouch first: the foot already on the ground pushes off,
+# the cycle slows right down in the air (the legs hold their split), the other foot lands where it would anyway,
+# and the cycle carries on. The clip starts and ends on the same frame of that gait, so it blends in and out of the
+# walk / run; the take-off comes PUSH seconds after the start.
+PUSH = 0.10                         # s from the start of the clip to leaving the ground
+LEAP = dict(walk=dict(air=0.30, legs=0.3, dip=0.025, arms=-18.0),      # dip: x the body's height
+            run=dict(air=0.38, legs=0.3, dip=0.035, arms=-24.0))
+G_ = 9.81
+
+
+def _stance_intervals(base, foot, n=400):
+    """Phases (0..1) where `foot` is planted in the base gait clip."""
+    on = [foot in base.fn(k / n * base.length, base.length)['feet'].get('_stance', ()) for k in range(n)]
+    return np.array(on)
+
+
+def _first_after(mask, start, want, n):
+    for k in range(1, n + 1):
+        i = int(round(start * n + k)) % n
+        if mask[i] == want and mask[(i - 1) % n] != want: return (start * n + k) / n
+    return None
+
+
+def moving_jumps(drv, gaits):
+    """jump_walk / jump_run ClipDefs from the walk / run ClipDefs in `gaits` (people)."""
+    out = []
+    if drv.plan != 'biped' or len(drv.legs) < 2: return out
+    H = drv.rig.height
+    names = sorted(e['name'] for e, c in drv.legs)
+    X, Y = names[0], names[1]                          # push off X (the left), land on Y
+    for gname in ('walk', 'run'):
+        base = gaits.get(gname)
+        if base is None or base.speed <= 0: continue
+        P = LEAP[gname]; T = base.length; n = 400
+        sx = _stance_intervals(base, X, n); sy = _stance_intervals(base, Y, n)
+        y_down = _first_after(sy, 0.0, True, n)        # Y strikes the ground
+        x_up = _first_after(sx, 0.0, False, n)         # X leaves the ground (its swing starts)
+        if y_down is None or x_up is None: continue
+        air = P['air']; rate = P['legs']
+        ph_to = y_down - rate * air / T                # take off so that Y lands on its own strike, the legs moving at
+        if x_up < y_down: ph_to = min(ph_to, x_up)     # `legs` x their pace; a run takes off where X leaves anyway
+        ph0 = ph_to - PUSH / T
+        t_to = PUSH; t_ld = t_to + air
+        length = PUSH + air + (ph0 + 1.0 - y_down) * T  # ends on the gait frame it started on
+        # phase(t): normal pace on the ground, slower in the air; the change is eased over RAMP s INSIDE the flight
+        # (a planted foot never changes speed) and the slow pace is chosen so Y lands exactly on its own strike
+        RAMP = 0.06
+        D = (y_down - ph_to) * T                        # cycle time that must pass in the air
+        rate = max(0.05, (D - RAMP) / (air - RAMP))
+        ts = np.linspace(0, length, int(length * 240) + 2)
+        ease = lambda x: np.clip(x, 0, 1) ** 2 * (3 - 2 * np.clip(x, 0, 1))
+        pace = 1 - (1 - rate) * (ease((ts - t_to) / RAMP) - ease((ts - t_ld + RAMP) / RAMP))
+        ph = ph0 + np.concatenate([[0], np.cumsum(0.5 * (pace[1:] + pace[:-1]) * np.diff(ts))]) / T
+        # the body's extra height: the leg pushes it up over the last TP s on the ground (speeding up evenly to v0),
+        # then a free flight (real gravity) back to the gait's own height at touch-down, then the landing soaks the
+        # fall speed up like a damped spring (dips DIP x H at most). Height AND speed are continuous throughout.
+        TP = 0.08
+        v0 = G_ * air * air / 2 / (air + TP / 2); h0 = v0 * TP / 2
+        v_land = v0 - G_ * air
+        tau_c = np.e * P['dip'] * H / max(abs(v_land), 1e-6)
+        rise = h0 + v0 * v0 / (2 * G_)                  # metres at the top of the flight
+
+        def extra(t, t_to=t_to, t_ld=t_ld, v0=v0, h0=h0, v_land=v_land, tau_c=tau_c, length=length):
+            if t <= t_to - TP: return 0.0
+            if t <= t_to: x = t - (t_to - TP); return v0 * x * x / (2 * TP)
+            if t <= t_ld: x = t - t_to; return h0 + v0 * x - G_ * x * x / 2
+            x = t - t_ld; fade = 1 - np.clip((t - (length - 0.12)) / 0.12, 0, 1) ** 2   # gone by the last frame
+            return v_land * x * np.exp(-x / tau_c) * fade
+
+        def fn(t, _T, base=base, ts=ts, ph=ph, t_to=t_to, t_ld=t_ld, h0=h0, P=P, T=T, x_up=x_up, extra=extra):
+            p = float(np.interp(t, ts, ph)); bt = (p % 1.0) * T
+            sp = base.fn(bt, T)
+            sp = dict(sp); feet = dict(sp['feet']); feet['_stance'] = set(feet.get('_stance', ()))
+            body = extra(t); arc = 0.0; env = 0.0
+            if t_to < t < t_ld:
+                u = (t - t_to) / (t_ld - t_to); env = np.sin(np.pi * u)
+                arc = max(0.0, body - h0 * (1 - u))     # the feet follow the body up, from where they left the ground
+                feet['_stance'] = set()                 # nothing is on the ground in the air
+            # X is still 'planted' in the base cycle for a moment after take-off: lift it off behind
+            lift_x = 0.0
+            if t > t_to and (p % 1.0) < x_up and t < t_ld + 0.2:
+                lift_x = 0.10 * H * ease((t - t_to) / 0.08) * (1 - ease((p % 1.0 - (x_up - 0.08)) / 0.08))
+                feet['_stance'].discard(X)
+            for nm in list(feet):
+                if nm == '_stance' or feet[nm] is None: continue
+                f = np.array(feet[nm], float); f[1] += arc + (lift_x if nm == X else 0.0); feet[nm] = f
+            # a planted foot the pushing / dipping body can no longer reach is on its toes: it leaves the stance
+            ro = np.array(sp.get('root_offset', (0, 0, 0)), float); sp_y = ro[1]; ro[1] += body
+            if body > 1e-6:                             # only where this jump raised the hips above the gait's own:
+                for nm in list(feet['_stance']):        # a foot the gait could reach but the raised hips can't
+                    one = drv.vault({'_stance': {nm}, nm: feet[nm]})
+                    if one is None or one < ro[1] - 1e-4: feet['_stance'].discard(nm)
+            sp['root_offset'] = tuple(ro); sp['feet'] = feet
+            sw = sp.get('arm_swing', {})
+            sp['arm_swing'] = {k: v + P['arms'] * env for k, v in sw.items()}
+            sp['knee_floor'] = None
+            return sp
+        out.append(ClipDef('jump_' + gname, length, fn, False, base.speed,
+                           'jump in stride from the %s: push off the planted foot %.2f s in, %.2f s in the air '
+                           '(rises %.0f cm), lands on the other foot and carries on; starts and ends on the same %s frame'
+                           % (gname, PUSH, air, rise * 100, gname)))
     return out

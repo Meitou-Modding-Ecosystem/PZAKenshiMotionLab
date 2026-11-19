@@ -271,22 +271,37 @@ class Driver:
     def reset(self):
         self.springs = {}; self.knee_floor_hits = 0; self.hand_releases = 0; self.body_floor_lifts = 0
 
-    def _upper_bones(self, skip_arms=False):
+    def _placed_arms(self, spec, W):
+        """Sides whose hand the arm solver will place this frame: a reference clip's hands, and hands put down that
+        are within reach of their shoulder (a hand out of reach lets go and keeps its swing pose)."""
+        out = set(spec.get('hands_rel', {}))
+        want = dict(spec.get('hands', {})); want.update({k: None for k in spec.get('hands_down', {})})
+        for e, ch in self.arms:
+            if e['side'] not in want or len(ch) < 2: continue
+            sh = self.rig.chain_points(ch, W)[0]; reach = sum(self.rig.length[b] for b in ch)
+            tg = want[e['side']]
+            if tg is None:
+                hz, hx, hy = spec['hands_down'][e['side']]
+                if abs(sh[1] - hy) < 0.98 * reach: out.add(e['side'])
+            elif np.linalg.norm(np.asarray(tg, float) - sh) <= 0.98 * reach: out.add(e['side'])
+        return frozenset(out)
+
+    def _upper_bones(self, skip=frozenset()):
         """Every bone that is not part of a leg (legs reach the floor on purpose; their own rules keep them out of it),
-        and with skip_arms not part of an arm either."""
+        nor of an arm on a side in `skip`."""
         if getattr(self, '_upper', None) is None: self._upper = {}
-        if skip_arms not in self._upper:
-            r = self.rig; skip = set(b for e, ch in self.legs for b in ch)
-            if skip_arms: skip |= set(b for e, ch in self.arms for b in ch)
+        if skip not in self._upper:
+            r = self.rig; skipb = set(b for e, ch in self.legs for b in ch)
+            skipb |= set(b for e, ch in self.arms if e['side'] in skip for b in ch)
             out = []
             for b in range(r.n):
                 p = b; inside = False
                 while p >= 0:
-                    if p in skip: inside = True; break
+                    if p in skipb: inside = True; break
                     p = r.parents[p]
                 if not inside: out.append(b)
-            self._upper[skip_arms] = np.array(out, int)
-        return self._upper[skip_arms]
+            self._upper[skip] = np.array(out, int)
+        return self._upper[skip]
 
     def _spring(self, key, kc):
         if key not in self.springs: self.springs[key] = Spring(*kc)
@@ -340,7 +355,7 @@ class Driver:
         W = r.fk(q, t, s)
         floor = spec.get('body_floor')
         if floor is not None:                                     # head / spine / arms never sink under the floor:
-            ub = self._upper_bones(skip_arms=bool(spec.get('hands_rel')))   # arms placed by their own solver don't count
+            ub = self._upper_bones(skip=self._placed_arms(spec, W))   # arms their own solver will place don't count
             low = float(W[ub, 1, 3].min())                     # lift the whole body by what is missing
             if low < floor:
                 t[root] = t[root] + np.array([0.0, floor - low, 0.0])       # same frame as root_offset
@@ -504,7 +519,30 @@ def standard_clips(drv, ground_wings='hidden'):
 
     def walker(stride, lift, duty, bob, pitch, lean_head, crouch, arm_amp=0.0, fore=0.0, vault=False, air=0.0,
                ymax=0.0, slack=0.985, arm_bias=0.0, fore_amp=0.0, centre=0.0, all_legs=False):
+        cache = {}
+
         def fn(t, T):
+            sp = raw(t, T)
+            if not vault: return sp
+            # the hips' height, smoothed round the cycle (sigma 30 ms): the vault alone sags and then snaps back up at
+            # each toe-off. A planted foot the smoothed hips can no longer reach is coming off its toes: it leaves the
+            # stance early instead of dragging the hips down.
+            if T not in cache:
+                N = 360; ys = np.array([raw(k / N * T, T)['root_offset'][1] for k in range(N)])
+                sig = max(1.0, 0.03 / T * N); x = np.arange(-int(4 * sig), int(4 * sig) + 1)
+                g = np.exp(-0.5 * (x / sig) ** 2); g /= g.sum()
+                cache[T] = np.array([float(np.dot(g, ys[(k + x) % N])) for k in range(N)])
+            tab = cache[T]; N = len(tab); f = (t / T % 1.0) * N; k0 = int(f) % N
+            y = float(tab[k0] + (tab[(k0 + 1) % N] - tab[k0]) * (f - int(f)))
+            feet = dict(sp['feet']); st = set(feet.get('_stance', ()))
+            for nm in list(st):
+                one = drv.vault({'_stance': {nm}, nm: feet[nm]}, slack)
+                if one is None or one < y - 1e-4: st.discard(nm)
+            feet['_stance'] = st
+            sp = dict(sp); sp['feet'] = feet; sp['root_offset'] = (sp['root_offset'][0], y, sp['root_offset'][2])
+            return sp
+
+        def raw(t, T):
             ph = t / T
             w = 2 * np.pi * ph
             feet = gait_feet(drv, ph, stride, lift, duty, centre=centre)
@@ -649,8 +687,9 @@ def standard_clips(drv, ground_wings='hidden'):
         ClipDef('sting', 1.2, sting, False, 0.0, 'sting: wind-up, fast jab with the abdomen swung under and forward, recover'),
     ]
     if drv.plan == 'biped':                     # knockdowns and get-ups (motionlab/moves.py)
-        from .moves import biped_moves
+        from .moves import biped_moves, moving_jumps
         clips += biped_moves(drv)
+        clips += moving_jumps(drv, {c.name: c for c in clips})
     return [c for c in clips if clip_fits(drv, c.name)]
 
 

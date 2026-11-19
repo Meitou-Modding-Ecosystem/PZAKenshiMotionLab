@@ -20,9 +20,10 @@ drv = motion.Driver(motion.Rig(m.skeleton, rm))
 names = [c.name for c in motion.standard_clips(drv)]
 MOVES = ['knockdown_back', 'knockdown_front', 'getup_back', 'getup_front', 'roll_forward', 'roll_dive',
          'jump_up', 'jump_forward', 'jump_down', 'land_soft', 'land_hard']
-ok(names == ['idle', 'walk', 'run'] + MOVES, 'clips for a person: %s' % names)
+STRIDE = ['jump_walk', 'jump_run']
+ok(names == ['idle', 'walk', 'run'] + MOVES + STRIDE, 'clips for a person: %s' % names)
 for cd in motion.standard_clips(drv):
-    if cd.name in MOVES: continue
+    if cd.name in MOVES: continue                     # (gaits and in-stride jumps: feet planted, no slip)
     ck = check.foot_check(drv, cd)
     miss = max(ck['ik_miss_m'].values(), default=0); slip = max(ck['slip_m_per_s'].values(), default=0)
     ok(miss < 0.01 and slip < 0.05, '%s: foot miss %.4f m, slip %.4f m/s' % (cd.name, miss, slip))
@@ -56,6 +57,27 @@ for name in ('jump_up', 'jump_forward'):
     ok(max(lift) - rest_ankle > 0.2, '%s: both feet leave the ground (%.2f m at the top)' % (name, max(lift) - rest_ankle))
     q, t, s, W = drv.pose(cd.fn(cd.length, cd.length)); z = W[root_b][2, 3] - rig.Wrest[root_b][2, 3]
     ok(abs(z - (1.8 if name == 'jump_forward' else 0.0) * rig.Wrest[root_b][1, 3]) < 0.05, '%s: lands %.2f m forward' % (name, z))
+# smooth: the hips never change speed by more than 1 m/s from one 1/60 s frame to the next (the vault used to sag and
+# snap back up at each toe-off; a jump used to kick off and land with an instant change of speed)
+for cd in motion.standard_clips(drv):
+    if cd.name not in ['walk', 'run'] + STRIDE: continue
+    drv.reset(); ys = []
+    for k in range(int(cd.length * 60) + 1):
+        tt = (k / 60) % cd.length if cd.loop else min(k / 60, cd.length)
+        q, t, s, W = drv.pose(cd.fn(tt, cd.length), dt=1 / 60); ys.append(W[root_b][1, 3])
+    jerk = float(np.abs(np.diff(np.diff(ys) * 60)).max())
+    ok(jerk < 1.0, '%s: smooth hips (worst speed change %.2f m/s in one frame)' % (cd.name, jerk))
+for name in STRIDE:                                   # in stride: off the ground soon after the start, back on the gait
+    cd = [c for c in motion.standard_clips(drv) if c.name == name][0]
+    ok(cd.speed > 0 and not cd.loop, '%s: moves at the gait speed (%.2f m/s)' % (name, cd.speed))
+    drv.reset(); first_air = None
+    for k in range(int(cd.length * 60) + 1):
+        sp = cd.fn(min(k / 60, cd.length), cd.length)
+        if not sp['feet']['_stance'] and first_air is None: first_air = k / 60
+    ok(first_air is not None and first_air <= 0.12, '%s: off the ground %s s after the start' % (name, 'never' if first_air is None else '%.2f' % first_air))
+    base = [c for c in motion.standard_clips(drv) if c.name == name.split('_')[1]][0]
+    q0 = drv.pose(cd.fn(0.0, cd.length))[0]; q1 = drv.pose(cd.fn(cd.length, cd.length))[0]
+    ok(np.abs(np.array(q0) - np.array(q1)).max() < 0.05, '%s: starts and ends on the same %s frame' % (name, base.name))
 # through the file pipeline: the rig and skin come out unchanged
 d = tempfile.mkdtemp(); src = os.path.join(d, 'biped.glb')
 gltf.write_glb(src, m)
@@ -64,7 +86,7 @@ back = gltf.load_glb(r['glb'])
 ok(r['own_rig'] and r['plan'] == 'biped', 'pipeline kept the own rig')
 ok(back.skeleton.names == m.skeleton.names, 'bones unchanged (%d)' % len(back.skeleton))
 ok(float(np.abs(back.verts - m.verts).max()) < 1e-5, 'geometry unchanged')
-ok(sorted(gltf.read_clips(r['glb'])) == sorted(['idle', 'run', 'walk'] + MOVES), 'clips in the file')
+ok(sorted(gltf.read_clips(r['glb'])) == sorted(['idle', 'run', 'walk'] + MOVES + STRIDE), 'clips in the file')
 # the walk moves the legs and swings the arms
 rc = gltf.read_clips(r['glb'])['walk']
 ok('Bip01 L UpperArm' in rc and np.ptp(rc['Bip01 L UpperArm']['rotation'], axis=0).max() > 0.05, 'arms swing in the walk')
