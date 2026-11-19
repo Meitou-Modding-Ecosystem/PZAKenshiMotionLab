@@ -17,7 +17,7 @@ Two ways in:
 - **A model that is already rigged the Kenshi way** (Kenshi's humans of every race, its animals, anything exported with
   the same `Bip01 ...` bone names) **keeps its own skeleton and skin**. The Motion Lab recognises legs, arms, tail, ears
   and jaw by their names and adds the motion: people get idle, walk and run (arms swing) plus **knocked down onto the
-  back / onto the stomach and getting up from each**; four-legged animals get idle, walk, run (a trot) and a bite.
+  back / onto the stomach, getting up from each, a forward roll and a dive roll**; four-legged animals get idle, walk, run (a trot) and a bite.
 - **A model with no rig, or a rig it does not know** (a Meshy export), is **auto-rigged** from its shape. Today that
   auto-rig knows insect-like bodies (legs, wings, antennae, abdomen); more body plans later.
 
@@ -29,14 +29,15 @@ animation data). A model on one of those skeletons moves by its own numbers; oth
 ours now comes out at: knee 11-83 degrees (Kenshi 12-73), pelvis 0.93-0.97 m (0.92-0.97), arm swing -23 / +24 degrees
 (-21 / +24). Four-legged animals are close but not exact yet (the dog walks a little lower than Kenshi's).
 
-**Knockdowns and get-ups learned from reference clips.** `motionlab/reference.py` reads a skeleton-only reference
+**Knockdowns, get-ups and rolls learned from reference clips.** `motionlab/reference.py` reads a skeleton-only reference
 `.glb` (for example a Mixamo download converted by `tools/fbx_to_glb.py`, with your own Adobe account) and measures it:
 when the pelvis starts to drop and reaches the ground, the bounce, how far the body travels, which side it ends on,
-when hands and knees touch down. Only those numbers go into the code (`motionlab/moves.py`); no animation data and no
+when hands and knees touch down; for rolls how far the body turns, when it is upside down and on its back. Only those numbers go into the code (`motionlab/moves.py`); no animation data and no
 reference files are in this repo. The moves are built from body states (how far the body is tipped, pelvis height,
 feet planted or carried, hands on the ground) and the leg / arm solvers do the rest. Rules that keep them honest, each
 counted by `check.move_check`: a kneeling knee rests on the floor instead of going through it, a planted hand lets go
-once the body rises out of its reach, a deep crouch slides the feet out along the ground instead of into it. The
+once the body rises out of its reach, a deep crouch slides the feet out along the ground instead of into it, the head / spine / arms never sink under
+the floor (the body is lifted instead). The preview GIFs follow a body that travels (rolls, knockdowns). The
 get-ups follow the reference's phases (hands down while sitting or pushing up, knees down while kneeling) at game pace,
 about half the reference length.
 
@@ -171,7 +172,8 @@ blender -b --factory-startup --python tools/blender_check.py -- out/my_creature/
 - **Not tried in Kenshi yet.** The clips are checked in Blender and by our own tests; the trip through Kenshi IO into
   the game is next.
 - Whether Kenshi plays bone *scale* keys (the wing shrink) is unknown: `--ground-wings folded` is the fallback.
-- People: idle, walk, run, two knockdowns and two get-ups; no combat moves yet. Four-legged animals: idle, walk, run
+- People: idle, walk, run, two knockdowns, two get-ups, two forward rolls; no combat moves yet. Moves that travel
+  (knockdowns, rolls) carry the distance in the root bone; whether Kenshi wants that or an in-place clip is untested. Four-legged animals: idle, walk, run
   and a bite. The knockdowns end in one fixed lying pose; Kenshi's ragdoll and its own get-up timing are not matched.
 
 ## Limits

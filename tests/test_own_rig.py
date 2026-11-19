@@ -18,7 +18,7 @@ ok(len(rm['legs']) == 2 and len(rm['arms']) == 2, 'legs %d, arms %d' % (len(rm['
 ok(all(e.get('foot') for e in rm['legs']), 'feet kept level: %s' % [e.get('foot') for e in rm['legs']])
 drv = motion.Driver(motion.Rig(m.skeleton, rm))
 names = [c.name for c in motion.standard_clips(drv)]
-MOVES = ['knockdown_back', 'knockdown_front', 'getup_back', 'getup_front']
+MOVES = ['knockdown_back', 'knockdown_front', 'getup_back', 'getup_front', 'roll_forward', 'roll_dive']
 ok(names == ['idle', 'walk', 'run'] + MOVES, 'clips for a person: %s' % names)
 for cd in motion.standard_clips(drv):
     if cd.name in MOVES: continue
@@ -29,13 +29,17 @@ for cd in motion.standard_clips(drv):
 for cd in motion.standard_clips(drv):
     if cd.name not in MOVES: continue
     mc = check.move_check(drv, cd)
-    down = cd.name.startswith('knockdown')
-    a, b = (mc['pelvis_start'], mc['pelvis_end']) if down else (mc['pelvis_end'], mc['pelvis_start'])
-    ok(abs(a - 1) < 0.03 and b < 0.3, '%s: pelvis %.2f -> %.2f of standing height' % (cd.name, mc['pelvis_start'], mc['pelvis_end']))
+    if cd.name.startswith('roll'):                     # stand -> roll over the back (pelvis low) -> stand again
+        ok(abs(mc['pelvis_start'] - 1) < 0.03 and abs(mc['pelvis_end'] - 1) < 0.03 and mc['pelvis_min'] < 0.3,
+           '%s: pelvis %.2f -> lowest %.2f -> %.2f of standing height' % (cd.name, mc['pelvis_start'], mc['pelvis_min'], mc['pelvis_end']))
+    else:
+        down = cd.name.startswith('knockdown')
+        a, b = (mc['pelvis_start'], mc['pelvis_end']) if down else (mc['pelvis_end'], mc['pelvis_start'])
+        ok(abs(a - 1) < 0.03 and b < 0.3, '%s: pelvis %.2f -> %.2f of standing height' % (cd.name, mc['pelvis_start'], mc['pelvis_end']))
     ok(mc['lowest_joint'] > -0.03, '%s: lowest joint %.3f of standing height' % (cd.name, mc['lowest_joint']))
-    ok(mc['hand_miss_m'] < 0.05, '%s: planted hand miss %.3f m (%d let go out of reach, %d knees set on the floor)'
-       % (cd.name, mc['hand_miss_m'], mc['hand_releases'], mc['knee_floor_hits']))
-    ok(not cd.loop and 2.0 < cd.length < 5.0, '%s: one-shot, %.2f s' % (cd.name, cd.length))
+    ok(mc['hand_miss_m'] < 0.05, '%s: planted hand miss %.3f m (%d let go out of reach, %d knees set on the floor, %d body lifts)'
+       % (cd.name, mc['hand_miss_m'], mc['hand_releases'], mc['knee_floor_hits'], mc['body_floor_lifts']))
+    ok(not cd.loop and 1.0 < cd.length < 5.0, '%s: one-shot, %.2f s' % (cd.name, cd.length))
 # through the file pipeline: the rig and skin come out unchanged
 d = tempfile.mkdtemp(); src = os.path.join(d, 'biped.glb')
 gltf.write_glb(src, m)

@@ -190,7 +190,8 @@ def leg_phases(rigmap):
 class Driver:
     def __init__(self, rig, ground_wings='hidden', spring_antenna=(70.0, 7.0), spring_abdomen=(160.0, 14.0)):
         self.rig = rig; self.map = rig.map; self.ground_wings = ground_wings
-        self.knee_floor_hits = 0; self.hand_releases = 0           # rule counters (checks report them)
+        self.knee_floor_hits = 0; self.hand_releases = 0; self.body_floor_lifts = 0   # rule counters (checks report them)
+        self._upper = None
         self.phase = leg_phases(self.map)
         self.sa = spring_antenna; self.sb = spring_abdomen
         self.up = np.array([0.0, 1.0, 0.0])
@@ -268,7 +269,21 @@ class Driver:
         return best
 
     def reset(self):
-        self.springs = {}; self.knee_floor_hits = 0; self.hand_releases = 0
+        self.springs = {}; self.knee_floor_hits = 0; self.hand_releases = 0; self.body_floor_lifts = 0
+
+    def _upper_bones(self):
+        """Every bone that is not part of a leg (legs reach the floor on purpose; their own rules keep them out of it)."""
+        if getattr(self, '_upper', None) is None:
+            r = self.rig; leg = set(b for e, ch in self.legs for b in ch)
+            out = []
+            for b in range(r.n):
+                p = b; inleg = False
+                while p >= 0:
+                    if p in leg: inleg = True; break
+                    p = r.parents[p]
+                if not inleg: out.append(b)
+            self._upper = np.array(out, int)
+        return self._upper
 
     def _spring(self, key, kc):
         if key not in self.springs: self.springs[key] = Spring(*kc)
@@ -310,6 +325,12 @@ class Driver:
             sc = max(1e-3, float(w.get('scale', 1.0)))
             s[ch[0]] = np.array([sc, sc, sc])
         W = r.fk(q, t, s)
+        floor = spec.get('body_floor')
+        if floor is not None:                                     # head / spine / arms never sink under the floor:
+            low = float(W[self._upper_bones(), 1, 3].min())     # lift the whole body by what is missing
+            if low < floor:
+                t[root] = t[root] + np.array([0.0, floor - low, 0.0])       # same frame as root_offset
+                W = r.fk(q, t, s); self.body_floor_lifts += 1
         # springs: antennae and abdomen follow their procedural pose with lag
         dtt = spec.get('dt', dt)
         for key, ch, kc, extra in [('ant_' + e['name'], c, (600.0, 40.0) if e.get('stiff') else self.sa,

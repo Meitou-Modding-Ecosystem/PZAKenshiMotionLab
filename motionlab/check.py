@@ -45,4 +45,5 @@ def move_check(drv, cd, fps=30):
                 hand_miss = max(hand_miss, float(np.linalg.norm(rig.chain_points(ch, W)[-1] - tg)))
     return {'pelvis_start': py[0], 'pelvis_min': min(py), 'pelvis_end': py[-1], 'lowest_joint': low,
             'hand_miss_m': hand_miss, 'frames': n + 1,
-            'knee_floor_hits': drv.knee_floor_hits, 'hand_releases': drv.hand_releases}
+            'knee_floor_hits': drv.knee_floor_hits, 'hand_releases': drv.hand_releases,
+            'body_floor_lifts': drv.body_floor_lifts}

@@ -88,6 +88,7 @@ class Renderer:
             x = px + dx; y = py + dy
             ok = (x >= 0) & (x < W) & (y >= 0) & (y < H)
             idx = y[ok] * W + x[ok]; zz = z[ok]; cc = col[ok]
+            if idx.size == 0: continue                    # nothing of it on screen this frame
             o = np.lexsort((zz, idx))
             idx, zz, cc = idx[o], zz[o], cc[o]
             first = np.r_[True, idx[1:] != idx[:-1]]

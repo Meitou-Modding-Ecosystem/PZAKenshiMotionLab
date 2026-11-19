@@ -144,3 +144,35 @@ def measure_getup(ts, P):
             'torso_pitch_start_deg': round(float(pitch[0]), 1), 'torso_pitch_at_half_up_deg':
                 round(float(pitch[np.argmax(y >= 0.55 * Hs)]), 1) if phases['half_up'] else None,
             'pelvis_curve': [round(float(x / Hs), 3) for x in y[:: max(1, len(y) // 40)]]}
+
+
+def measure_roll(ts, P):
+    """A forward roll: the body's pitch turned through (summed about the side axis, 360 = one full turn), when it is
+    upside down, pelvis and head heights, how tight the tuck is, travel, and hand / back contacts."""
+    hips = P['hips']; ground = min(P['l_toe'][:, 1].min(), P['r_toe'][:, 1].min(), P['head'][:, 1].min())
+    y = hips[:, 1] - ground; H0 = float(y[0])
+    side = mx.norm(P['l_thigh'] - P['r_thigh'])
+    torso = P['neck'] - P['hips']
+    fwd0 = mx.norm(np.cross(side[0], [0, 1, 0]))
+    # pitch angle of the torso in the plane (forward, up): 0 = upright, +90 = leaning flat forward, 180 = upside down
+    ang = np.unwrap(np.arctan2(torso @ fwd0, torso[:, 1]))
+    ang = np.degrees(ang - ang[0])
+    inv = ang > 135
+    tuck = np.linalg.norm(0.5 * (P['l_knee'] + P['r_knee']) - P['chest'], axis=1) / H0
+    travel = hips[-1] - hips[0]; travel[1] = 0
+    back_down = (P['chest'][:, 1] - ground) < 0.25 * H0
+    hd = {h: _first(ts, (P[h][:, 1] - ground) < 0.12 * H0) for h in ('l_hand', 'r_hand') if h in P}
+    t_inv = _first(ts, inv)
+    t_back = [round(float(t), 2) for t in (ts[back_down][0], ts[back_down][-1])] if back_down.any() else None
+    t_up = None
+    if t_inv is not None:
+        k = int(np.argmax(inv)); after = np.nonzero((y >= 0.9 * H0) & (np.arange(len(y)) > k))[0]
+        t_up = float(ts[after[0]]) if len(after) else None
+    return {'pelvis_height_m': H0, 'length_s': float(ts[-1]), 'turned_deg': round(float(ang.max()), 1),
+            't_hands_down_s': hd, 't_upside_down_s': t_inv, 'upside_down_for_s': round(float(inv.sum() * (ts[1] - ts[0])), 3),
+            'back_on_ground_s': t_back, 't_standing_again_s': t_up,
+            'pelvis_min': round(float(y.min() / H0), 3), 't_pelvis_min_s': float(ts[np.argmin(y)]),
+            'head_lowest': round(float((P['head'][:, 1] - ground).min() / H0), 3),
+            'tuck_min': round(float(tuck.min()), 3), 'travel_along_facing': round(float(travel @ fwd0) / H0, 3),
+            'pelvis_curve': [round(float(x / H0), 3) for x in y[:: max(1, len(y) // 40)]],
+            'pitch_curve_deg': [round(float(x)) for x in ang[:: max(1, len(ang) // 40)]]}

@@ -14,7 +14,7 @@ FALL_FRONT = dict(react=0.12, drop=0.65, bounce=0.07, settle=0.9, travel=0.72, k
 GETUP_BACK = dict(prop=1.0, rise=0.95, stand=0.35)        # prop up on hands / sit up, rise to a crouch, stand
 GETUP_FRONT = dict(push=1.0, kneel=0.8, rise=0.9)         # push up to hands and knees, kneel, stand
 
-KEYS = ('th', 'py', 'pz', 'fz', 'fy', 'fw', 'arm', 'fore', 'spine', 'head', 'hw', 'hz', 'hx')
+KEYS = ('th', 'py', 'pz', 'fz', 'fy', 'fw', 'arm', 'fore', 'spine', 'head', 'hw', 'hz', 'hx', 'tk', 'fa')
 
 
 def _lerp_state(a, b, u):
@@ -39,7 +39,7 @@ class Track:
 
 
 def state(**kw):
-    s = dict(th=0.0, py=0.0, pz=0.0, fz=0.0, fy=0.0, fw=0.0, arm=0.0, fore=10.0, spine=0.0, head=0.0, hw=0.0, hz=0.0, hx=0.1)
+    s = dict(th=0.0, py=0.0, pz=0.0, fz=0.0, fy=0.0, fw=0.0, arm=0.0, fore=10.0, spine=0.0, head=0.0, hw=0.0, hz=0.0, hx=0.1, tk=0.0, fa=0.0)
     s.update(kw); return s
 
 
@@ -65,16 +65,19 @@ def biped_moves(drv):
         feet = {'_stance': set()}
         for e, c in drv.legs:
             rest = drv.rest_tip[e['name']]
-            planted = rest.copy()
+            planted = rest + np.array([0.0, 0.0, s['fa']])     # fa: where the planted feet stand (after travel)
             carried = np.array([rest[0], max(ankle[e['name']], s['fy']), pel[2] + s['fz']])
             f = planted * (1 - s['fw']) + carried * s['fw']
+            if s['tk'] > 0:                            # tucked: feet drawn up under the body, in the body's own frame
+                tuck = pel + mx.q_rotate(turn, np.array([rest[0] - P0[0], -0.38 * L, 0.12 * L]))
+                f = f * (1 - s['tk']) + tuck * s['tk']
             f[1] = max(f[1], ankle[e['name']])
             feet[e['name']] = f
         sp = {'root_offset': (0.0, s['py'] - P0[1], s['pz']), 'root_rot': turn, 'feet': feet,
               'arm_swing': {e['side']: s['arm'] for e, c in drv.arms}, 'forearm_bend': s['fore'],
               'body_rot': mx.q_axis_angle(X, np.radians(s['spine'])), 'head_rot': mx.q_axis_angle(X, np.radians(s['head'])),
-              'feet_follow_body': s['fw'] > 0.5 and s['th'] < 0,         # on the back: toes up; else feet stay flat
-              'elbows_out': 0.8 if s['th'] > 45 else 0.0, 'knee_floor': 0.035 * H0}
+              'feet_follow_body': (s['fw'] > 0.5 and s['th'] < 0) or s['tk'] > 0.5,   # on the back / tucked: feet go with the body
+              'elbows_out': 0.8 if 45 < s['th'] < 135 else 0.0, 'knee_floor': 0.035 * H0, 'body_floor': 0.03 * H0}
         if s['hw'] > 0.5:                              # hands planted: under the shoulder, hz / hx in arm lengths
             sp['hands'] = {}
             for e, c in drv.arms:
@@ -125,12 +128,33 @@ def biped_moves(drv):
         (b + 0.55 * gf['rise'], st(th=12, py=0.8 * H0, fw=0.5, fz=0.0, arm=-10, fore=25, spine=6), 'smooth'),
         (c, st(), 'smooth'),
     ]
+    # forward rolls: crouch, reach, hands down, tuck the head, roll over the back, feet under, rise; travel forward.
+    # Key fractions and heights from the measured rolls (motionlab/reference.py measure_roll): turned 360, upside down
+    # at ~0.5 of the clip, pelvis lowest (~0.14-0.17 of standing) on the back at ~0.6, standing again at ~0.9-0.96
+    def roll_keys(T, trav, hop):
+        f = lambda x: x * T
+        k = [(0.0, st(), 'lin'),
+             (f(0.18), st(th=18, py=0.70 * H0, pz=0.05 * trav, arm=-70, fore=20, spine=10, head=5), 'smooth')]
+        if hop:                                         # the dive: spring up and forward off both feet first
+            k.append((f(0.32), st(th=55, py=0.95 * H0, pz=0.30 * trav, fw=0.6, fz=-0.4 * L, fy=0.25 * H0, arm=-150, fore=10, spine=5), 'out'))
+        k += [(f(0.42), st(th=95, py=0.50 * H0, pz=0.45 * trav, fw=0.5, fz=-0.5 * L, fy=0.15 * H0, tk=0.5,
+                          hw=1.0, hz=0.25, hx=0.15, arm=-90, spine=55, head=45), 'fall' if hop else 'smooth'),
+              (f(0.52), st(th=180, py=0.42 * H0, pz=0.55 * trav, tk=1.0, arm=-60, fore=90, spine=80, head=50), 'smooth'),
+              (f(0.62), st(th=265, py=0.15 * H0, pz=0.68 * trav, tk=1.0, arm=-50, fore=90, spine=75, head=45), 'smooth'),
+              (f(0.76), st(th=320, py=0.32 * H0, pz=0.85 * trav, tk=0.7, fa=0.9 * trav, arm=-70, fore=60, spine=35, head=20), 'smooth'),
+              (f(0.88), st(th=345, py=0.62 * H0, pz=0.95 * trav, fa=trav, arm=-50, fore=30, spine=12, head=5), 'smooth'),
+              (T, st(th=360, pz=trav, fa=trav), 'smooth')]
+        return k
+    roll_keys_fwd = roll_keys(1.3, 2.2 * H0, False)
+    roll_keys_dive = roll_keys(1.8, 3.2 * H0, True)
     out = []
     for name, keys, note in (
             ('knockdown_back', back_keys, 'knocked down onto the back: snap back, knees buckle, topple, small bounce, lie still'),
             ('knockdown_front', front_keys, 'knocked down onto the stomach: knees give, pitch over, hands brace, land'),
             ('getup_back', getup_back_keys, 'get up from the back: prop on the hands, sit up, feet in, rise, stand'),
-            ('getup_front', getup_front_keys, 'get up from the stomach: push up to hands and knees, kneel, stand')):
+            ('getup_front', getup_front_keys, 'get up from the stomach: push up to hands and knees, kneel, stand'),
+            ('roll_forward', roll_keys_fwd, 'forward roll from standing: crouch, hands down, tuck, over the back, rise'),
+            ('roll_dive', roll_keys_dive, 'dive roll: spring forward, land on the hands, tuck, roll, rise')):
         tr = Track(keys)
         length = tr.keys[-1][0]
         out.append(ClipDef(name, length, (lambda tr: (lambda t, T: spec_from(tr.at(t))))(tr), False, 0.0, note))
