@@ -190,6 +190,7 @@ def leg_phases(rigmap):
 class Driver:
     def __init__(self, rig, ground_wings='hidden', spring_antenna=(70.0, 7.0), spring_abdomen=(160.0, 14.0)):
         self.rig = rig; self.map = rig.map; self.ground_wings = ground_wings
+        self.knee_floor_hits = 0; self.hand_releases = 0           # rule counters (checks report them)
         self.phase = leg_phases(self.map)
         self.sa = spring_antenna; self.sb = spring_abdomen
         self.up = np.array([0.0, 1.0, 0.0])
@@ -267,7 +268,7 @@ class Driver:
         return best
 
     def reset(self):
-        self.springs = {}
+        self.springs = {}; self.knee_floor_hits = 0; self.hand_releases = 0
 
     def _spring(self, key, kc):
         if key not in self.springs: self.springs[key] = Spring(*kc)
@@ -342,12 +343,61 @@ class Driver:
                 inner = np.radians(180.0 - kmax)               # the knee's inner angle at its most bent
                 dmin = np.sqrt(La * La + Lb * Lb - 2 * La * Lb * np.cos(inner))
                 v = tgt - pts0[0]; dv = np.linalg.norm(v)
-                if 1e-9 < dv < dmin: tgt = pts0[0] + v / dv * dmin
-            pts = leg_ik(pts0, tgt, self.up, bend=e.get('bend'))
+                if 1e-9 < dv < dmin:
+                    capped = pts0[0] + v / dv * dmin
+                    if capped[1] < tgt[1] and abs(v[1]) < dmin:     # never push a foot down into the floor: slide it
+                        hzv = v.copy(); hzv[1] = 0.0                  # out along the ground at its own height instead
+                        n = np.linalg.norm(hzv); hzv = hzv / n if n > 1e-9 else np.array([0.0, 0.0, 1.0])
+                        capped = np.array([pts0[0][0], tgt[1], pts0[0][2]]) + hzv * np.sqrt(dmin * dmin - v[1] * v[1])
+                    tgt = capped
+            turn = spec.get('root_rot')                            # a body lying down bends its knees its own way
+            bend = e.get('bend')
+            if bend is not None and turn is not None: bend = mx.q_rotate(turn, bend)
+            pts = leg_ik(pts0, tgt, self.up, bend=bend)
+            floor = spec.get('knee_floor')
+            if floor is not None and len(pts) == 3 and pts[1][1] < floor:   # kneeling: the knee rests ON the floor
+                pts = _knee_on_floor(pts, np.linalg.norm(pts0[1] - pts0[0]), np.linalg.norm(pts0[2] - pts0[1]),
+                                     float(floor), float(tgt[1]))
+                self.knee_floor_hits += 1
             r.aim_chain(ch, pts, q, t, s, W)
             if e.get('foot') in r.idx:                            # keep the foot / hoof at its rest angle (flat)
-                r.set_world_rot(r.b(e['foot']), r.qrest_w[r.b(e['foot'])], q, t, s, W)
+                fq = r.qrest_w[r.b(e['foot'])]
+                if turn is not None and spec.get('feet_follow_body'): fq = mx.q_mul(turn, fq)
+                r.set_world_rot(r.b(e['foot']), fq, q, t, s, W)
+        # hands planted on the ground (get-ups): arms solved like legs, elbows bending back
+        hands = spec.get('hands', {})
+        for e, ch in list(self.arms):
+            tgt = hands.get(e['side'])
+            if tgt is None or len(ch) < 2: continue
+            pts0 = r.chain_points(ch, W)
+            reach = sum(r.length[b] for b in ch)
+            if np.linalg.norm(np.asarray(tgt, float) - pts0[0]) > 0.98 * reach:   # out of reach: the hand lets go
+                hands.pop(e['side'], None); self.hand_releases += 1
+                continue
+            bend = np.array([0.0, 0.0, -1.0])
+            if spec.get('root_rot') is not None: bend = mx.q_rotate(spec['root_rot'], bend)
+            w = float(spec.get('elbows_out', 0.0))              # face down: elbows go out to the side, not up
+            if w > 0:
+                side = np.array([1.0 if e['side'] == 'L' else -1.0, 0.0, 0.0])
+                bend = mx.norm((1 - w) * bend + w * side)
+            pts = leg_ik(pts0, np.asarray(tgt, float), self.up, bend=bend)
+            r.aim_chain(ch, pts, q, t, s, W)
         return q, t, s, W
+
+
+def _knee_on_floor(pts, La, Lb, floor, ankle_y):
+    """Re-place a two-part leg whose knee went under the floor: the knee sits on the floor in the same direction
+    from the hip, the shin lies back toward where the ankle was, the ankle no lower than its target height."""
+    hip, knee, ank = (np.asarray(p, float) for p in pts)
+    d = hip[1] - floor
+    hz = knee - hip; hz[1] = 0.0
+    n = np.linalg.norm(hz); hz = hz / n if n > 1e-9 else np.array([0.0, 0.0, 1.0])
+    k = hip + hz * np.sqrt(max(La * La - d * d, 0.0)); k[1] = floor if d < La else hip[1] - La
+    sz = ank - k; sz[1] = 0.0
+    n = np.linalg.norm(sz); sz = sz / n if n > 1e-9 else -hz
+    ay = max(ankle_y, k[1]); dy = ay - k[1]
+    a = k + sz * np.sqrt(max(Lb * Lb - dy * dy, 0.0)); a[1] = ay if dy < Lb else k[1] + Lb
+    return np.array([hip, k, a])
 
 
 # ------------------------------------------------------------------ clips
@@ -545,6 +595,9 @@ def standard_clips(drv, ground_wings='hidden'):
         ClipDef('attack', 1.0, bite, False, 0.0, 'bite: rear back head up, lunge and snap the head down, recover'),
         ClipDef('sting', 1.2, sting, False, 0.0, 'sting: wind-up, fast jab with the abdomen swung under and forward, recover'),
     ]
+    if drv.plan == 'biped':                     # knockdowns and get-ups (motionlab/moves.py)
+        from .moves import biped_moves
+        clips += biped_moves(drv)
     return [c for c in clips if clip_fits(drv, c.name)]
 
 

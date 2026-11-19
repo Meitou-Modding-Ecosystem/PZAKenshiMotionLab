@@ -50,12 +50,14 @@ def sample_read_clip(sk, clip_nodes, t):
     for i, nm in enumerate(sk.names):
         ch = clip_nodes.get(nm)
         if not ch: continue
-        ts = ch['times']; k = int(np.clip(np.searchsorted(ts, t) - 1, 0, len(ts) - 2)) if len(ts) > 1 else 0
-        u = 0.0 if len(ts) < 2 else float(np.clip((t - ts[k]) / max(ts[k + 1] - ts[k], 1e-9), 0, 1))
-        k2 = min(k + 1, len(ts) - 1)
-        if 'rotation' in ch: q[i] = mx.q_slerp(ch['rotation'][k], ch['rotation'][k2], u)
-        if 'translation' in ch: tr[i] = ch['translation'][k] * (1 - u) + ch['translation'][k2] * u
-        if 'scale' in ch: sc[i] = ch['scale'][k] * (1 - u) + ch['scale'][k2] * u
+        def at(path):
+            ts = ch.get('t_' + path, ch.get('times')); v = ch[path]
+            if len(ts) < 2: return v[0], v[0], 0.0
+            k = int(np.clip(np.searchsorted(ts, t) - 1, 0, len(ts) - 2))
+            return v[k], v[k + 1], float(np.clip((t - ts[k]) / max(ts[k + 1] - ts[k], 1e-9), 0, 1))
+        if 'rotation' in ch: a, b, u = at('rotation'); q[i] = mx.q_slerp(a, b, u)
+        if 'translation' in ch: a, b, u = at('translation'); tr[i] = a * (1 - u) + b * u
+        if 'scale' in ch: a, b, u = at('scale'); sc[i] = a * (1 - u) + b * u
     return [mx.trs(tr[i], q[i], sc[i]) for i in range(n)]
 
 

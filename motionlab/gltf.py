@@ -338,7 +338,13 @@ def read_clips(path):
             sm = an['samplers'][ch['sampler']]
             nm = js['nodes'][ch['target']['node']].get('name', str(ch['target']['node']))
             e = d.setdefault(nm, {})
-            e['times'] = accessor(js, binc, sm['input'])[:, 0].astype(np.float64)
-            e[ch['target']['path']] = accessor(js, binc, sm['output']).astype(np.float64)
+            path = ch['target']['path']
+            if path not in ('rotation', 'translation', 'scale'): continue
+            if sm.get('interpolation', 'LINEAR') == 'CUBICSPLINE': raise GlbError('cubic-spline animation is not supported')
+            t = accessor(js, binc, sm['input'])[:, 0].astype(np.float64)
+            v = accessor(js, binc, sm['output']).astype(np.float64)
+            if len(v) != len(t): raise GlbError('animation channel has %d keys for %d times' % (len(v), len(t)))
+            e['t_' + path] = t; e[path] = v           # each channel keeps its own key times (exporters differ)
+            if len(t) >= len(e.get('times', ())): e['times'] = t
         out[an.get('name', 'clip')] = d
     return out

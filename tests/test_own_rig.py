@@ -18,11 +18,24 @@ ok(len(rm['legs']) == 2 and len(rm['arms']) == 2, 'legs %d, arms %d' % (len(rm['
 ok(all(e.get('foot') for e in rm['legs']), 'feet kept level: %s' % [e.get('foot') for e in rm['legs']])
 drv = motion.Driver(motion.Rig(m.skeleton, rm))
 names = [c.name for c in motion.standard_clips(drv)]
-ok(names == ['idle', 'walk', 'run'], 'clips for a person: %s' % names)
+MOVES = ['knockdown_back', 'knockdown_front', 'getup_back', 'getup_front']
+ok(names == ['idle', 'walk', 'run'] + MOVES, 'clips for a person: %s' % names)
 for cd in motion.standard_clips(drv):
+    if cd.name in MOVES: continue
     ck = check.foot_check(drv, cd)
     miss = max(ck['ik_miss_m'].values(), default=0); slip = max(ck['slip_m_per_s'].values(), default=0)
     ok(miss < 0.01 and slip < 0.05, '%s: foot miss %.4f m, slip %.4f m/s' % (cd.name, miss, slip))
+# knockdowns and get-ups: start standing / lying, end lying / standing, nothing sinks under the floor, hands reach
+for cd in motion.standard_clips(drv):
+    if cd.name not in MOVES: continue
+    mc = check.move_check(drv, cd)
+    down = cd.name.startswith('knockdown')
+    a, b = (mc['pelvis_start'], mc['pelvis_end']) if down else (mc['pelvis_end'], mc['pelvis_start'])
+    ok(abs(a - 1) < 0.03 and b < 0.3, '%s: pelvis %.2f -> %.2f of standing height' % (cd.name, mc['pelvis_start'], mc['pelvis_end']))
+    ok(mc['lowest_joint'] > -0.03, '%s: lowest joint %.3f of standing height' % (cd.name, mc['lowest_joint']))
+    ok(mc['hand_miss_m'] < 0.05, '%s: planted hand miss %.3f m (%d let go out of reach, %d knees set on the floor)'
+       % (cd.name, mc['hand_miss_m'], mc['hand_releases'], mc['knee_floor_hits']))
+    ok(not cd.loop and 2.0 < cd.length < 5.0, '%s: one-shot, %.2f s' % (cd.name, cd.length))
 # through the file pipeline: the rig and skin come out unchanged
 d = tempfile.mkdtemp(); src = os.path.join(d, 'biped.glb')
 gltf.write_glb(src, m)
@@ -31,7 +44,7 @@ back = gltf.load_glb(r['glb'])
 ok(r['own_rig'] and r['plan'] == 'biped', 'pipeline kept the own rig')
 ok(back.skeleton.names == m.skeleton.names, 'bones unchanged (%d)' % len(back.skeleton))
 ok(float(np.abs(back.verts - m.verts).max()) < 1e-5, 'geometry unchanged')
-ok(sorted(gltf.read_clips(r['glb'])) == ['idle', 'run', 'walk'], 'clips in the file')
+ok(sorted(gltf.read_clips(r['glb'])) == sorted(['idle', 'run', 'walk'] + MOVES), 'clips in the file')
 # the walk moves the legs and swings the arms
 rc = gltf.read_clips(r['glb'])['walk']
 ok('Bip01 L UpperArm' in rc and np.ptp(rc['Bip01 L UpperArm']['rotation'], axis=0).max() > 0.05, 'arms swing in the walk')
