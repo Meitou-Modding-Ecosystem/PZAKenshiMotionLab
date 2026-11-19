@@ -296,9 +296,19 @@ class Driver:
         root = r.b(self.map['root']); body = r.b(self.map['body']); head = r.b(self.map['head'])
         t[root] = r.rest_t[root] + np.asarray(spec.get('root_offset', (0, 0, 0)))
         if 'root_rot' in spec: q[root] = mx.norm(mx.q_mul(spec['root_rot'], r.rest_q[root]))
-        if 'body_rot' in spec: q[body] = r.local_from_world_delta(body, spec['body_rot'])
+        if 'body_rot' in spec:
+            chain = [r.b(n) for n in self.map.get('spine_chain', []) if n in r.idx]
+            if len(chain) > 1:                                    # a bend spreads over the whole back, not one joint
+                part = mx.q_slerp(mx.q_identity(), spec['body_rot'], 1.0 / len(chain))
+                for b in chain: q[b] = r.local_from_world_delta(b, part)
+            else: q[body] = r.local_from_world_delta(body, spec['body_rot'])
         if 'body_offset' in spec: t[body] = r.rest_t[body] + spec['body_offset']
-        if 'head_rot' in spec: q[head] = r.local_from_world_delta(head, spec['head_rot'])
+        if 'head_rot' in spec:
+            neck = self.map.get('neck')
+            if neck in r.idx:                                     # half in the neck, half in the head
+                half = mx.q_slerp(mx.q_identity(), spec['head_rot'], 0.5)
+                q[r.b(neck)] = r.local_from_world_delta(r.b(neck), half); q[head] = r.local_from_world_delta(head, half)
+            else: q[head] = r.local_from_world_delta(head, spec['head_rot'])
         if self.jaw is not None and spec.get('jaw_open'):
             q[self.jaw] = r.local_from_world_delta(self.jaw, mx.q_axis_angle([1, 0, 0], np.radians(spec['jaw_open'])))
         for e, ch in self.arms:                                   # arms swing about the shoulder's side axis

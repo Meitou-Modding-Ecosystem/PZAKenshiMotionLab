@@ -4,7 +4,7 @@
 # (motionlab/reference.py: numbers only, no animation data). Author: PZA. GPLv3.
 import numpy as np
 from . import mathx as mx
-from .motion import ClipDef, smoothstep
+from .motion import ClipDef
 
 # measured (medians of the reference falls / get-ups; seconds, heights relative to the standing pelvis height H0)
 FALL_BACK = dict(react=0.15, drop=0.75, bounce=0.06, settle=0.7, travel=-0.42, knee=110.0)
@@ -22,20 +22,44 @@ def _lerp_state(a, b, u):
 
 
 class Track:
-    """Body states at times, eased between keys (each key may choose its own easing into it)."""
+    """Body states at times. Between keys a monotone cubic (no overshoot) keeps the motion flowing THROUGH a key
+    instead of stopping at each one; a key may ask for its own entry: 'fall' (speeds up into it, like gravity: an
+    impact), 'out' (fast start, settles into it), 'lin', or 'smooth' (flows through)."""
 
     def __init__(self, keys):
         self.keys = sorted(keys, key=lambda k: k[0])
+        ts = np.array([k[0] for k in self.keys], float); self.ts = ts
+        V = np.array([[k[1][c] for c in KEYS] for k in self.keys], float); self.V = V
+        n = len(ts); h = np.diff(ts); h = np.where(h < 1e-9, 1e-9, h)
+        d = np.diff(V, axis=0) / h[:, None]                       # slope of each segment
+        m = np.zeros_like(V)                                       # Fritsch-Carlson tangents (first / last key: at rest)
+        for i in range(1, n - 1):
+            w1 = 2 * h[i] + h[i - 1]; w2 = h[i] + 2 * h[i - 1]
+            a, b = d[i - 1], d[i]
+            ok = (a * b) > 0
+            m[i] = np.where(ok, (w1 + w2) / np.where(ok, w1 / np.where(ok, a, 1) + w2 / np.where(ok, b, 1), 1), 0.0)
+        self.m0 = np.zeros_like(d); self.m1 = np.zeros_like(d)    # tangents at each segment's start / end
+        for k in range(n - 1):
+            ease = self.keys[k + 1][2]
+            self.m0[k], self.m1[k] = {'fall': (0 * d[k], 2 * d[k]), 'out': (2 * d[k], 0 * d[k]),
+                                      'lin': (d[k], d[k])}.get(ease, (m[k], m[k + 1]))
+        self.h = h
 
     def at(self, t):
-        ks = self.keys
-        if t <= ks[0][0]: return dict(ks[0][1])
-        for (t0, s0, _), (t1, s1, ease) in zip(ks, ks[1:]):
-            if t <= t1:
-                u = (t - t0) / max(t1 - t0, 1e-9)
-                u = {'smooth': smoothstep(u), 'fall': u * u, 'out': 1 - (1 - u) ** 2, 'lin': u}[ease]
-                return _lerp_state(s0, s1, u)
-        return dict(ks[-1][1])
+        ts = self.ts
+        if t <= ts[0]: return dict(zip(KEYS, self.V[0]))
+        if t >= ts[-1]: return dict(zip(KEYS, self.V[-1]))
+        k = int(np.clip(np.searchsorted(ts, t) - 1, 0, len(ts) - 2))
+        h = self.h[k]; u = (t - ts[k]) / h
+        h00 = 2 * u ** 3 - 3 * u ** 2 + 1; h10 = u ** 3 - 2 * u ** 2 + u; h01 = -2 * u ** 3 + 3 * u ** 2; h11 = u ** 3 - u ** 2
+        v = h00 * self.V[k] + h10 * h * self.m0[k] + h01 * self.V[k + 1] + h11 * h * self.m1[k]
+        return dict(zip(KEYS, v))
+
+
+# overlap: parts of the body reach each pose a little after the body does (seconds), and left / right differ, so the
+# limbs never move as one block. Arm and leg amplitude differ slightly per side.
+LAG = dict(spine=0.03, head=0.08, arm_L=0.05, arm_R=0.10, leg_L=0.0, leg_R=0.05)
+SIDE_AMP = dict(L=1.0, R=0.9)
 
 
 def state(**kw):
@@ -58,31 +82,38 @@ def biped_moves(drv):
     reach = {e['side']: float(sum(r.length[b] for b in c)) for e, c in drv.arms}
     X = [1, 0, 0]
 
-    def spec_from(s):
+    def spec_from(S):
+        """S(lag) = the body state lag seconds ago; the root follows S(0), the other parts their own lag."""
+        s = S(0.0); sp_ = S(LAG['spine']); hd = S(LAG['head'])
         th = np.radians(s['th'])
         turn = mx.q_axis_angle(X, th)
         pel = np.array([P0[0], s['py'], P0[2] + s['pz']])
         feet = {'_stance': set()}
         for e, c in drv.legs:
+            g = S(LAG['leg_' + e['side']]) if e['side'] in 'LR' else s
             rest = drv.rest_tip[e['name']]
-            planted = rest + np.array([0.0, 0.0, s['fa']])     # fa: where the planted feet stand (after travel)
-            carried = np.array([rest[0], max(ankle[e['name']], s['fy']), pel[2] + s['fz']])
-            f = planted * (1 - s['fw']) + carried * s['fw']
-            if s['tk'] > 0:                            # tucked: feet drawn up under the body, in the body's own frame
+            planted = rest + np.array([0.0, 0.0, g['fa']])     # fa: where the planted feet stand (after travel)
+            carried = np.array([rest[0], max(ankle[e['name']], g['fy']), pel[2] + g['fz']])
+            f = planted * (1 - g['fw']) + carried * g['fw']
+            if g['tk'] > 0:                            # tucked: feet drawn up under the body, in the body's own frame
                 tuck = pel + mx.q_rotate(turn, np.array([rest[0] - P0[0], -0.38 * L, 0.12 * L]))
-                f = f * (1 - s['tk']) + tuck * s['tk']
+                f = f * (1 - g['tk']) + tuck * g['tk']
             f[1] = max(f[1], ankle[e['name']])
             feet[e['name']] = f
+        arms = {e['side']: S(LAG.get('arm_' + e['side'], 0.05)) for e, c in drv.arms}
         sp = {'root_offset': (0.0, s['py'] - P0[1], s['pz']), 'root_rot': turn, 'feet': feet,
-              'arm_swing': {e['side']: s['arm'] for e, c in drv.arms}, 'forearm_bend': s['fore'],
-              'body_rot': mx.q_axis_angle(X, np.radians(s['spine'])), 'head_rot': mx.q_axis_angle(X, np.radians(s['head'])),
+              'arm_swing': {sd: a['arm'] * SIDE_AMP.get(sd, 1.0) for sd, a in arms.items()},
+              'forearm_bend': {sd: a['fore'] * SIDE_AMP.get(sd, 1.0) for sd, a in arms.items()},
+              'body_rot': mx.q_axis_angle(X, np.radians(sp_['spine'])), 'head_rot': mx.q_axis_angle(X, np.radians(hd['head'])),
               'feet_follow_body': (s['fw'] > 0.5 and s['th'] < 0) or s['tk'] > 0.5,   # on the back / tucked: feet go with the body
               'elbows_out': 0.8 if 45 < s['th'] < 135 else 0.0, 'knee_floor': 0.035 * H0, 'body_floor': 0.03 * H0}
         if s['hw'] > 0.5:                              # hands planted: under the shoulder, hz / hx in arm lengths
             sp['hands'] = {}
             for e, c in drv.arms:
-                sd = e['side']; sh = pel + mx.q_rotate(mx.q_mul(turn, mx.q_axis_angle(X, np.radians(s['spine']))), shoulder[sd]); out = 1.0 if sd == 'L' else -1.0
-                sp['hands'][sd] = np.array([sh[0] + out * s['hx'] * reach[sd], 0.04 * H0, sh[2] + s['hz'] * reach[sd]])
+                sd = e['side']; a_ = arms[sd]
+                if a_['hw'] <= 0.5: continue           # this hand is not down yet / already up (its own lag)
+                sh = pel + mx.q_rotate(mx.q_mul(turn, mx.q_axis_angle(X, np.radians(sp_['spine']))), shoulder[sd]); out = 1.0 if sd == 'L' else -1.0
+                sp['hands'][sd] = np.array([sh[0] + out * a_['hx'] * reach[sd], 0.04 * H0, sh[2] + a_['hz'] * reach[sd]])
         return sp
 
     # knockdown backward: snap back, knees buckle, topple, land with a small bounce, settle, lie still
@@ -156,6 +187,6 @@ def biped_moves(drv):
             ('roll_forward', roll_keys_fwd, 'forward roll from standing: crouch, hands down, tuck, over the back, rise'),
             ('roll_dive', roll_keys_dive, 'dive roll: spring forward, land on the hands, tuck, roll, rise')):
         tr = Track(keys)
-        length = tr.keys[-1][0]
-        out.append(ClipDef(name, length, (lambda tr: (lambda t, T: spec_from(tr.at(t))))(tr), False, 0.0, note))
+        length = tr.keys[-1][0] + max(LAG.values()) + 0.1      # the trailing parts settle before the clip ends
+        out.append(ClipDef(name, length, (lambda tr: (lambda t, T: spec_from(lambda lag: tr.at(t - lag))))(tr), False, 0.0, note))
     return out

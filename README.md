@@ -37,7 +37,10 @@ reference files are in this repo. The moves are built from body states (how far 
 feet planted or carried, hands on the ground) and the leg / arm solvers do the rest. Rules that keep them honest, each
 counted by `check.move_check`: a kneeling knee rests on the floor instead of going through it, a planted hand lets go
 once the body rises out of its reach, a deep crouch slides the feet out along the ground instead of into it, the head / spine / arms never sink under
-the floor (the body is lifted instead). The preview GIFs follow a body that travels (rolls, knockdowns). The
+the floor (the body is lifted instead). The preview GIFs follow a body that travels (rolls, knockdowns). To keep them from looking mechanical: the keys are joined by a
+monotone cubic, so the body flows through a pose instead of stopping at each one (impacts keep their sudden stop); the
+head, spine, arms and legs reach each pose a little after the body, left and right at different times and sizes; a
+bend spreads over all the spine bones and the neck. The
 get-ups follow the reference's phases (hands down while sitting or pushing up, knees down while kneeling) at game pace,
 about half the reference length.
 

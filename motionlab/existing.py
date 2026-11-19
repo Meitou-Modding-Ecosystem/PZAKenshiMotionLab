@@ -39,6 +39,9 @@ def _bip01_map(model):
     rm = {'plan': 'biped', 'units': 'metres', 'forward': '+Z', 'up': '+Y', 'root': names[root], 'body': names[body],
           'head': names[head] if head is not None else names[body], 'spine': [], 'legs': [], 'wings': [], 'antennae': [],
           'arms': [], 'source_rig': 'Bip01'}
+    chain = [find[k] for k in ('spine', 'spine1', 'spine2', 'spine3') if k in find]     # a bend spreads over these
+    if len(chain) > 1 and chain[0] == body: rm['spine_chain'] = [names[i] for i in chain]
+    if 'neck' in find and head is not None: rm['neck'] = names[find['neck']]
     def leg(side, upper, lower, foot, n, bend):
         u, l = find.get('%s %s' % (side, upper)), find.get('%s %s' % (side, lower))
         f = find.get('%s %s' % (side, foot))
