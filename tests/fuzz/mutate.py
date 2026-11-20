@@ -12,6 +12,13 @@ MUTANTS = [
      "and True)", ['tests/fuzz/fuzz_curves.py', '120']),
     ('motionlab/curves.py', "if not (np.isfinite(length) and 0 < length <= 600): raise ValueError",
      "if False: raise ValueError", ['tests/fuzz/fuzz_reference.py', '300']),
+    # the 2026-11-19 benchmark fixes (tests/test_animals.py must notice each one undone)
+    ('motionlab/motion.py', "if neck in r.idx and not self.neck_carries_legs:", "if neck in r.idx:", ['tests/test_animals.py']),
+    ('motionlab/motion.py', "tgt = (1 - fold) * (pts0[-1] if tgt is None else np.asarray(tgt)) + fold * ft",
+     "tgt = ft if tgt is None else (1 - fold) * np.asarray(tgt) + fold * ft", ['tests/test_animals.py']),
+    ('motionlab/motion.py', "le = min(lift, 0.45 * drv.leg_lens.get(e['name'], lift / 0.45))", "le = lift", ['tests/test_animals.py']),
+    ('motionlab/motion.py', "                if True:\n                    if hips is not None:",
+     "                if hips is not None:\n                    if hips is not None:", ['tests/test_animals.py']),
 ]
 
 caught = 0

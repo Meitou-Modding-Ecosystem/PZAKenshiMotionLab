@@ -81,6 +81,32 @@ def make_hexapod(yaw_deg=0.0):
     return m
 
 
+QUAD = {  # a four-legged body shaped like Kenshi's animals (rounded, about 0.6 of a dog): the front legs hang off the
+    # NECK, whose pivot sits well ahead of and above the shoulders (a nod swings them), and are shorter than the hind
+    # legs; the hind "foot" is the hock, high off the ground
+    'Bip01': (None, (0, 0.62, -0.36)), 'Bip01 Pelvis': ('Bip01', (0, 0.62, -0.36)),
+    'Bip01 L Thigh': ('Bip01 Pelvis', (0.11, 0.62, -0.36)), 'Bip01 L Calf': ('Bip01 L Thigh', (0.19, 0.36, -0.26)),
+    'Bip01 L Foot': ('Bip01 L Calf', (0.16, 0.27, -0.45)), 'Bip01 L Toe0': ('Bip01 L Foot', (0.16, 0.02, -0.42)),
+    'Bip01 R Thigh': ('Bip01 Pelvis', (-0.11, 0.62, -0.36)), 'Bip01 R Calf': ('Bip01 R Thigh', (-0.19, 0.36, -0.26)),
+    'Bip01 R Foot': ('Bip01 R Calf', (-0.16, 0.27, -0.45)), 'Bip01 R Toe0': ('Bip01 R Foot', (-0.16, 0.02, -0.42)),
+    'Bip01 Spine': ('Bip01 Pelvis', (0, 0.63, -0.2)), 'Bip01 Spine1': ('Bip01 Spine', (0, 0.64, 0.0)),
+    'Bip01 Spine2': ('Bip01 Spine1', (0, 0.65, 0.16)), 'Bip01 Neck': ('Bip01 Spine2', (0, 0.74, 0.41)),
+    'Bip01 Head': ('Bip01 Neck', (0, 0.77, 0.5)),
+    'Bip01 L Clavicle': ('Bip01 Neck', (0.07, 0.7, 0.2)), 'Bip01 L UpperArm': ('Bip01 L Clavicle', (0.13, 0.46, 0.25)),
+    'Bip01 L Forearm': ('Bip01 L UpperArm', (0.14, 0.37, 0.18)), 'Bip01 L Hand': ('Bip01 L Forearm', (0.2, 0.11, 0.25)),
+    'Bip01 R Clavicle': ('Bip01 Neck', (-0.07, 0.7, 0.2)), 'Bip01 R UpperArm': ('Bip01 R Clavicle', (-0.13, 0.46, 0.25)),
+    'Bip01 R Forearm': ('Bip01 R UpperArm', (-0.14, 0.37, 0.18)), 'Bip01 R Hand': ('Bip01 R Forearm', (-0.2, 0.11, 0.25)),
+}
+QUAD_ENDS = {'Bip01 L Toe0': (0.16, 0.02, -0.36), 'Bip01 R Toe0': (-0.16, 0.02, -0.36), 'Bip01 Head': (0, 0.78, 0.68),
+             'Bip01 L Hand': (0.2, 0.02, 0.3), 'Bip01 R Hand': (-0.2, 0.02, 0.3)}
+
+
+def make_quadruped():
+    """A stick four-legged animal rigged like Kenshi's dog (Bip01 names; front legs under the neck, shorter than the
+    hind legs): tube per bone, skinned rigidly."""
+    return _stick(QUAD, QUAD_ENDS, 'test_quadruped')
+
+
 def make_biped():
     """A stick person rigged like Kenshi's characters (3ds Max Biped names, Bip01 ...): tube per bone, skinned rigidly."""
     from motionlab.model import Skeleton
@@ -98,11 +124,17 @@ def make_biped():
         'Bip01 R Clavicle': ('Bip01 Spine2', (-0.05, 1.5, 0)), 'Bip01 R UpperArm': ('Bip01 R Clavicle', (-0.18, 1.5, 0)),
         'Bip01 R Forearm': ('Bip01 R UpperArm', (-0.2, 1.2, 0)), 'Bip01 R Hand': ('Bip01 R Forearm', (-0.21, 0.92, 0.02)),
     }
+    ends = {'Bip01 L Toe0': (0.1, 0.02, 0.24), 'Bip01 R Toe0': (-0.1, 0.02, 0.24), 'Bip01 Head': (0, 1.85, 0.02),
+            'Bip01 L Hand': (0.21, 0.8, 0.03), 'Bip01 R Hand': (-0.21, 0.8, 0.03)}
+    return _stick(J, ends, 'test_biped')
+
+
+def _stick(J, ends, name):
+    """Skeleton from {name: (parent, world position)} + a tube per bone, skinned rigidly."""
+    from motionlab.model import Skeleton
     sk = Skeleton(); idx = {}
     for nm, (par, p) in J.items():
         idx[nm] = sk.add(nm, idx[par] if par else -1, np.array(p, float))
-    ends = {'Bip01 L Toe0': (0.1, 0.02, 0.24), 'Bip01 R Toe0': (-0.1, 0.02, 0.24), 'Bip01 Head': (0, 1.85, 0.02),
-            'Bip01 L Hand': (0.21, 0.8, 0.03), 'Bip01 R Hand': (-0.21, 0.8, 0.03)}
     V, T, Jn = [], [], []; base = 0
     for nm, (par, p) in J.items():
         kids = [k for k, (pp, _) in J.items() if pp == nm]
@@ -110,7 +142,7 @@ def make_biped():
         if tail is None or np.linalg.norm(np.subtract(tail, p)) < 1e-3: continue
         v, t = _tube([np.array(p, float), np.array(tail, float)], 0.05 if 'Spine' in nm or nm == 'Bip01 Pelvis' else 0.035, sub=3)
         V.append(v); T.append(t + base); Jn += [idx[nm]] * len(v); base += len(v)
-    m = Model(); m.name = 'test_biped'
+    m = Model(); m.name = name
     m.verts = np.concatenate(V); m.tris = np.concatenate(T)
     n = np.zeros_like(m.verts); fn = np.cross(m.verts[m.tris[:, 1]] - m.verts[m.tris[:, 0]], m.verts[m.tris[:, 2]] - m.verts[m.tris[:, 0]])
     for k in range(3): np.add.at(n, m.tris[:, k], fn)

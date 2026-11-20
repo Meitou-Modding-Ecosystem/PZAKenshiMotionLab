@@ -238,6 +238,20 @@ blender -b --factory-startup --python tools/blender_check.py -- out/my_creature/
   used to flip from behind to in front in one frame); the swing leaves and lands at part of the ground speed; a
   kneeling knee keeps where the leg put it and, where the hips are too low for the thigh, the body is lifted
   instead of the knee flipping sides; the stomach get-up's hands-and-knees hips sit one thigh length up.
+- **Animals and flyers (fixed 2026-11-19, found by a benchmark over Kenshi's dog, the human bodies and an
+  auto-rigged insect):**
+  - Kenshi's animals hang their front legs off the neck, so a head turn there swung the shoulders: the dog's bite
+    lifted its planted front paws and slid them. On such a body the whole head turn now goes on the head bone.
+  - One swing height for every leg aimed the dog's short front paws at its shoulders in the run, and the knee rule
+    then snapped them down (30 m/s in one frame). Each leg now swings at most 0.45 of its own length.
+  - The hips no longer take a one-frame step where a run's flight phase starts. The reach limit dips the hip curve
+    smoothly for every body, not only for people. The dog's run still turns over sharply at the top of each bound:
+    2.8 m/s per frame, against 3.0 in Kenshi's own dog run.
+  - A leg that rides along with the body (lifted) now tucks for flight as gradually as the others. It used to jump
+    straight to the full tuck: 13 m/s at take-off and landing.
+  - The floor check measures the body only. Kenshi's held-item sockets (Prop1 / Prop2, children of the hands, no
+    skin) sit about 20 cm past the palm, so a hand planted in a get-up or roll puts them under the floor. That
+    matters only for a held weapon, and `move_check` reports it apart as `socket_lowest`.
 - **Ground speed (open):** with the measured curves, our run's planted foot slides at 8.3 m/s (male) / 8.2 (female),
   Kenshi's ankle at 6.6 / 6.4. Our heel and ball stay exactly planted while the foot rolls 70 degrees onto its toes;
   Kenshi's ankle number does not count that roll. Which one the game's run speed matches is unchecked until the clip
@@ -289,6 +303,10 @@ python tests/test_naturalness.py
 
 ```bash
 python tests/fuzz/fuzz_curves.py 150
+```
+
+```bash
+python tests/test_animals.py
 ```
 
 ```bash

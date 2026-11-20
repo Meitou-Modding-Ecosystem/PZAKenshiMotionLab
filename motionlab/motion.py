@@ -242,6 +242,17 @@ class Driver:
         self.reach = float(np.median(reach))
         lens = [np.linalg.norm(np.diff(r.chain_points(c, Wr), axis=0), axis=1).sum() for e, c in self.legs] or [1.0]
         self.leg_len = float(np.median(lens))
+        self.leg_lens = {e['name']: float(l) for (e, c), l in zip(self.legs, lens)}   # each leg's own (a dog's front legs are short)
+        # Kenshi's animals hang their front legs off the NECK (Bip01 Neck -> Clavicle -> UpperArm): turning the neck there
+        # swings the shoulders and lifts the planted front paws (the dog's bite: 3 cm off the ground, sliding 1.2 m/s),
+        # so on such a body the whole head turn goes on the head bone
+        nk = r.idx.get(self.map.get('neck')) if self.map.get('neck') in r.idx else None
+        def _under(b, anc):
+            while b >= 0:
+                if b == anc: return True
+                b = r.parents[b]
+            return False
+        self.neck_carries_legs = nk is not None and any(_under(c[0], nk) for e, c in self.legs)
         if self.reach < 0.3 * self.leg_len: self.reach = 0.6 * self.leg_len      # upright legs (feet under the hips)
         # the longest stride every planted leg can take (stance speed must be the same for all legs or feet slide);
         # straight-legged rigs need the body lowered a little while walking to get a stride at all
@@ -281,6 +292,25 @@ class Driver:
                         else: hi_ = mid
                     lim.append(lo_)
             return 2.0 * min(lim) if lim else 0.5
+
+    def reach_shift(self, want_z, drop=0.0, slack=0.98):
+        """How far (up to want_z, signed) the body can shift forward / back with every planted foot at its rest place
+        still in reach of its own hip, with the body lowered by `drop` (leg by leg: a dog's front legs are short)."""
+        lo_, hi_ = 0.0, 1.0
+        def ok(f):
+            for e, ch in self.legs:
+                if e.get('lifted'): continue
+                P0 = self.rig.chain_points(ch, self._Wr); kk = (len(ch) + 1) // 2
+                L = slack * (np.linalg.norm(P0[kk] - P0[0]) + np.linalg.norm(P0[-1] - P0[kk]))
+                hip = P0[0] + np.array([0.0, -drop, f * want_z])
+                if np.linalg.norm(self.rest_tip[e['name']] - hip) > L: return False
+            return True
+        if ok(1.0): return want_z
+        for _ in range(30):
+            mid = 0.5 * (lo_ + hi_)
+            if ok(mid): lo_ = mid
+            else: hi_ = mid
+        return lo_ * want_z
 
     def vault(self, feet, slack=0.985, rot=None):
         """Highest root offset at which every planted foot is still within reach of its hip: the inverted-pendulum
@@ -356,7 +386,7 @@ class Driver:
         if 'body_offset' in spec: t[body] = r.rest_t[body] + spec['body_offset']
         if 'head_rot' in spec:
             neck = self.map.get('neck')
-            if neck in r.idx:                                     # half in the neck, half in the head
+            if neck in r.idx and not self.neck_carries_legs:      # half in the neck, half in the head
                 half = mx.q_slerp(mx.q_identity(), spec['head_rot'], 0.5)
                 q[r.b(neck)] = r.local_from_world_delta(r.b(neck), half); q[head] = r.local_from_world_delta(head, half)
             else: q[head] = r.local_from_world_delta(head, spec['head_rot'])
@@ -431,7 +461,10 @@ class Driver:
                 if fold > 0:                                          # legs tucked under the body (flight)
                     hip, tip = pts0[0], pts0[-1]
                     ft = hip + (tip - hip) * np.array([0.6, 0.75, 0.6]) + np.array([0, 0.05 * r.height, 0])
-                    tgt = ft if tgt is None else (1 - fold) * np.asarray(tgt) + fold * ft
+                    # a leg with no target of its own (a lifted leg riding along) eases from where the body carries it,
+                    # by the same amount as the others: it went straight to the full tuck the instant the fold began
+                    # (the bee's back legs: 13 m/s in one frame at take-off and landing)
+                    tgt = (1 - fold) * (pts0[-1] if tgt is None else np.asarray(tgt)) + fold * ft
                 lens = np.array([r.length[b] for b in ch])
                 tgt = np.asarray(tgt, float)
                 kmax = self.knee_max
@@ -615,7 +648,10 @@ def gait_feet(drv, phase, stride, lift, duty, ground=0.0, centre=0.0, lift_peak=
             # warp w(u) = u + c u (1 - u), w(lift_peak) = 0.5: smooth, finite slope at both ends (a power curve
             # here yanked the foot up the instant it lifted)
             lp = float(np.clip(lift_peak, 0.27, 0.73)); c = (0.5 - lp) / (lp * (1 - lp))
-            h = lift * np.sin(np.pi * (u + c * u * (1 - u)))
+            # never more than 0.45 of THIS leg's length: one lift for every leg aimed a dog's short front paws at its
+            # shoulders, out of reach (the knee rule then snapped them down 33 cm in one frame)
+            le = min(lift, 0.45 * drv.leg_lens.get(e['name'], lift / 0.45))
+            h = le * np.sin(np.pi * (u + c * u * (1 - u)))
         pos = np.array([tip[0], ground + max(tip[1], 0.0) + h, tip[2] + centre + off])
         if roll is not None and e['name'] in drv.pivots:
             piv = drv.pivots[e['name']]
@@ -713,19 +749,23 @@ def standard_clips(drv, ground_wings='hidden'):
                 dil = np.array([ys[(k + win) % N].max() for k in range(N)])
                 cap = np.array([dil[(k + win) % N].min() for k in range(N)])   # fills narrow dips, keeps the peaks
                 cache[T] = np.minimum(sm, cap + HIP_MARGIN * drv.leg_len)
-                if hips is not None:
-                    # measured hip curve: where the reach limit is lower than the curve, take the shortfall over the
-                    # cycle, widen it (30 ms) and smooth it (20 ms), and lower the curve by that: a cap that bites becomes a
-                    # smooth dip instead of a kink (min(curve, reach) frame by frame cut corners into it)
-                    from .profiles import fourier_at
-                    yf = np.array([float(fourier_at(hips, k / N)) * drv.leg_len for k in range(N)])
-                    d = np.maximum(yf - ys, 0.0)
+                # where the reach limit is lower than the wanted curve (a measured one, or the smoothed one), take the
+                # shortfall over the cycle, widen it (30 ms) and smooth it (20 ms), and lower the curve by that: a cap
+                # that bites becomes a smooth dip instead of a kink. min(curve, reach) frame by frame cut corners into
+                # people's hips and left a 24 cm one-frame step in the dog's run where its flight phase starts.
+                if True:
+                    if hips is not None:
+                        from .profiles import fourier_at
+                        yf = np.array([float(fourier_at(hips, k / N)) * drv.leg_len for k in range(N)]); lim = ys
+                    else:
+                        yf = sm; lim = cap + HIP_MARGIN * drv.leg_len
+                    d = np.maximum(yf - lim, 0.0)
                     w2 = max(2, int(0.03 / T * N)); win2 = np.arange(-w2, w2 + 1)
                     dd = np.array([d[(k + win2) % N].max() for k in range(N)])
                     sig2 = max(1.0, 0.02 / T * N); x2 = np.arange(-int(4 * sig2), int(4 * sig2) + 1)
                     g2 = np.exp(-0.5 * (x2 / sig2) ** 2); g2 /= g2.sum()
                     ds = np.array([float(np.dot(g2, dd[(k + x2) % N])) for k in range(N)])
-                    cache[T] = np.minimum(yf - ds, ys + 0.002 * drv.leg_len)   # never more than 2 mm past the reach
+                    cache[T] = np.minimum(yf - ds, lim + 0.002 * drv.leg_len)   # never more than 2 mm past the reach
             tab = cache[T]; N = len(tab); f = (t / T % 1.0) * N; k0 = int(f) % N
             y = float(tab[k0] + (tab[(k0 + 1) % N] - tab[k0]) * (f - int(f)))
             feet = dict(sp['feet']); st = set(feet.get('_stance', ()))
@@ -818,8 +858,10 @@ def standard_clips(drv, ground_wings='hidden'):
         # rear back with the head up, then lunge and snap the head down (mandibles first), feet stay planted
         wind = smoothstep(t / 0.30) * (1 - smoothstep((t - 0.30) / 0.10))
         snap = smoothstep((t - 0.30) / 0.10) * (1 - smoothstep((t - 0.55) / 0.40))
-        lunge = min(0.05 * H, 0.35 * drv.stride_for(drv.stand_crouch + 0.6 * drv.crouch))   # only as far as the feet reach
-        back = min(0.03 * H, 0.35 * drv.stride_for(drv.stand_crouch))
+        # only as far as EVERY planted foot still reaches (leg by leg: the dog's short front legs lost their paws, which
+        # lifted 3 cm and slid at 1.2 m/s, when one stride number stood for all legs)
+        lunge = drv.reach_shift(min(0.05 * H, 0.35 * drv.stride_for(drv.stand_crouch + 0.6 * drv.crouch)), drv.stand_crouch + 0.6 * drv.crouch)
+        back = -drv.reach_shift(-min(0.03 * H, 0.35 * drv.stride_for(drv.stand_crouch)), drv.stand_crouch)
         return {'root_offset': (0, -drv.stand_crouch - 0.6 * drv.crouch * snap, -back * wind + lunge * snap),
                 'body_rot': ax(X, (-6 * wind + 4 * snap) * (0.0 if drv.plan == 'quadruped' else 1.0)),   # quadrupeds: front legs hang off the spine
                 'head_rot': ax(X, -24 * wind + 34 * snap),
@@ -867,6 +909,8 @@ def standard_clips(drv, ground_wings='hidden'):
             low = max(float(g['pelvis_drop'][1]), 0.03) * L          # the pelvis dips this low to reach the long steps
             stride = min(float(g['stride']) * L, 0.95 * drv.stride_for(low))
             lift = float(g['lift']) * L
+            if drv.plan == 'quadruped':      # a four-legged run's measured 'lift' includes the leap of the whole body, which
+                lift = min(lift, 0.5 * L)    # the gait adds on its own: the paws were aimed above the shoulders, out of reach
             pitch = 2.0 if kind == 'walk' else (RUN_PITCH if drv.plan == 'biped' else 4.0)
             kw = dict(vault=True, ymax=ymax, slack=slack, centre=float(g.get('foot_centre', 0.0)) * L, all_legs=True,
                       lift_peak=RUN_LIFT_PEAK if kind == 'run' else 0.5,

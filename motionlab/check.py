@@ -49,16 +49,22 @@ def move_check(drv, cd, fps=30):
     rig = drv.rig; drv.reset()
     root = rig.b(drv.map['root']); H0 = float(rig.Wrest[root][:3, 3][1])
     n = max(2, int(round(cd.length * fps)))
-    py, low, hand_miss = [], 0.0, 0.0
+    py, low, hand_miss, sock = [], 0.0, 0.0, 0.0
+    # Kenshi's held-item sockets (Prop1 / Prop2, children of the hands), footstep markers and end nubs carry no skin:
+    # they are not the body. A socket sits ~20 cm past the palm, so a hand planted on the floor puts it under: that
+    # matters only for a held weapon, reported apart as socket_lowest (not part of lowest_joint)
+    helper = np.array([any(k in nm for k in ('Prop', 'Footstep', 'Nub')) for nm in rig.names])
+    body = np.nonzero(~helper)[0]; socks = np.nonzero(np.array(['Prop' in nm for nm in rig.names]))[0]
     for k in range(n + 1):
         spec = cd.fn(min(k / fps, cd.length), cd.length); q, t, s, W = drv.pose(spec, dt=1 / fps)
         py.append(float(W[root][:3, 3][1]) / H0)
-        low = min(low, float(W[:, 1, 3].min()) / H0)
+        low = min(low, float(W[body, 1, 3].min()) / H0)
+        if len(socks): sock = min(sock, float(W[socks, 1, 3].min()) / H0)
         for e, ch in drv.arms:
             tg = spec.get('hands', {}).get(e['side'])
             if tg is not None:
                 hand_miss = max(hand_miss, float(np.linalg.norm(rig.chain_points(ch, W)[-1] - tg)))
     return {'pelvis_start': py[0], 'pelvis_min': min(py), 'pelvis_end': py[-1], 'lowest_joint': low,
-            'hand_miss_m': hand_miss, 'frames': n + 1,
+            'hand_miss_m': hand_miss, 'frames': n + 1, 'socket_lowest': sock,
             'knee_floor_hits': drv.knee_floor_hits, 'hand_releases': drv.hand_releases,
             'body_floor_lifts': drv.body_floor_lifts}
