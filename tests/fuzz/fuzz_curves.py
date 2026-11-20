@@ -1,6 +1,5 @@
-# PZA's Kenshi Motion Lab - local-curves fuzzer: a damaged motionlab/data/kenshi_curves.json (the file a user makes
-# from their own Kenshi install) must never crash the driver or put a broken number into a pose: bad entries are
-# dropped and that gait falls back to the public summaries. Uses made-up curves (no game data). Author: PZA. GPLv3.
+# PZA's Kenshi Motion Lab - curves-file fuzzer: a damaged motionlab/data/kenshi_curves.json must never crash the driver or put a broken number into a pose: bad entries are
+# dropped and that gait falls back to the summaries. Uses made-up curves (no game data). Author: PZA. GPLv3.
 #   python tests/fuzz/fuzz_curves.py [iterations]
 import copy, json, os, random, sys, tempfile, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))

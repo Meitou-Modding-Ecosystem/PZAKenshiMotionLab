@@ -2,11 +2,11 @@
 # turn the pelvis, counter-turn the chest, roll the feet heel -> toe and keep the hip height free of corners, measured
 # the same way the Studio does (motionlab/metrics.py) against the numbers measured from Kenshi's own clips
 # (kenshi_gaits.json 'scorecard'). Runs on the procedural test body, so no game files are needed; it covers the
-# public path (summaries only) and, with made-up curves, the measured-curve path. Author: PZA. GPLv3.
+# summary path (no curves file) and, with made-up curves, the measured-curve path. Author: PZA. GPLv3.
 #   python tests/test_naturalness.py
 import copy, os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..')); sys.path.insert(0, os.path.dirname(__file__))
-os.environ['MOTIONLAB_NO_CURVES'] = '1'                 # the public path first (CI has no local curves)
+os.environ['MOTIONLAB_NO_CURVES'] = '1'                 # the summary path first (no curves file)
 import numpy as np
 from synthetic import make_biped
 from motionlab import existing, motion, metrics, studio, check, profiles
@@ -49,7 +49,7 @@ for g in ('walk', 'run'):
     ok(pub[g]['pelvis yaw range (deg)'] > 5 and pub[g]['foot roll range (deg)'] > 40,
        'public %s: the pelvis turns (%.0f deg) and the feet roll (%.0f deg)' % (g, pub[g]['pelvis yaw range (deg)'], pub[g]['foot roll range (deg)']))
 
-# the measured-curve path, with made-up curves of the right shape (a local curves file adds these to the profile)
+# the measured-curve path, with made-up curves of the right shape (the curves file adds these to the profile)
 src = open(os.path.join(os.path.dirname(__file__), 'fuzz', 'fuzz_curves.py'), encoding='utf-8').read()
 ns = {'np': np}; exec(src[src.index('def made_up'):src.index('good = {')], ns)
 rm2 = copy.deepcopy(rm)

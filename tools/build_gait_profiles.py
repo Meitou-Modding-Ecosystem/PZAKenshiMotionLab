@@ -59,11 +59,10 @@ for plan in ('biped', 'quadruped'):
                                      [float(v) for v in np.median([x[k] for x in fr], axis=0)]) for k in fr[0]}
         med[kind] = m
     out['median'][plan] = med
-# curves (how the pelvis / chest / head / arms turn, the feet roll, the ankle's path) rebuild Kenshi's own motion almost
-# exactly: they are animation data, so they go to a LOCAL file (git-ignored, never in the add-on zip) made from your
-# own Kenshi install; the public file keeps only the summary numbers
-curves = {'note': 'LOCAL ONLY: curves measured from your own Kenshi install (tools/build_gait_profiles.py). Never '
-                  'commit or share this file.', 'skeletons': {}, 'median': {}}
+# curves (how the pelvis / chest / head / arms turn, the feet roll, the ankle's path) go to their own file,
+# motionlab/data/kenshi_curves.json; kenshi_gaits.json keeps the summary numbers (and lossy summaries of the curves,
+# which the gait falls back on when the curves file is missing)
+curves = {'note': "Curves measured from Kenshi's walk / run clips (tools/build_gait_profiles.py).", 'skeletons': {}, 'median': {}}
 for grp in ('skeletons', 'median'):
     for key, p in out[grp].items():
         for kind in ('walk', 'run'):
@@ -74,4 +73,4 @@ for grp in ('skeletons', 'median'):
 os.makedirs(os.path.dirname(profiles.DATA), exist_ok=True)
 with open(profiles.DATA, 'w', encoding='utf-8') as f: json.dump(out, f, indent=1)
 with open(profiles.CURVES, 'w', encoding='utf-8') as f: json.dump(curves, f, indent=1)
-print('wrote', profiles.DATA, '(%d skeletons, summary numbers) and the LOCAL curves' % len(out['skeletons']), profiles.CURVES)
+print('wrote', profiles.DATA, '(%d skeletons, summary numbers) and the curves' % len(out['skeletons']), profiles.CURVES)

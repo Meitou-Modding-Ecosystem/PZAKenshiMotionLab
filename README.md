@@ -24,8 +24,7 @@ Two ways in:
 
 **Gaits measured from Kenshi.** The walk and run numbers (cycle length, stride, foot lift, how low the pelvis rides,
 how far the knee straightens and bends, arm swing, elbow) are measured from Kenshi's own walk / run animations for every
-skeleton that has them (`tools/build_gait_profiles.py`, table in `motionlab/data/kenshi_gaits.json`: numbers only, no
-animation data). A model on one of those skeletons moves by its own numbers; other people and animals use the median.
+skeleton that has them (`tools/build_gait_profiles.py`: tables in `motionlab/data/kenshi_gaits.json` and `kenshi_curves.json`). A model on one of those skeletons moves by its own numbers; other people and animals use the median.
 `tools/measure_gait.py` prints the same numbers for Kenshi's clips and for ours side by side. For Kenshi's human walk
 ours now comes out at: knee 8-83 degrees (Kenshi 12-73), pelvis 0.93-0.97 m (0.92-0.97), arm swing -23 / +24 degrees
 (-21 / +24). Four-legged animals are close but not exact yet (the dog walks a little lower than Kenshi's).
@@ -39,14 +38,13 @@ from reach limits (40% of its motion in sharp corners, Kenshi's 3%). People now:
 - ride the hips on a smooth double bounce, with the reach limit only a safety net that dips smoothly when it bites;
 - move the shoulders and swing the arms across the body.
 
-Two levels:
-1. **Public (this repo):** lossy summaries in `kenshi_gaits.json` (the mean and one sine per body turn, the hips'
-   second harmonic, four numbers of the foot roll) drive our own shapes. Nothing in the repo rebuilds Kenshi's clips.
-2. **With your own Kenshi install:** `python tools/build_gait_profiles.py "<Kenshi>/data"` also writes
-   `motionlab/data/kenshi_curves.json`: curves measured from Kenshi's walk / run (body turns, arms, foot roll, the
-   ankle's path). They rebuild Kenshi's motion almost exactly, so they are **animation data: the file is git-ignored,
-   never in the add-on zip; never share it.** With it, our walk / run match Kenshi's on every Studio number. A damaged
-   file is checked on load (wrong shapes or numbers are dropped and the summary gait is used).
+Where the shapes come from:
+- **`motionlab/data/kenshi_curves.json`:** curves measured from Kenshi's walk / run (body turns, arms, foot roll, the
+  ankle's path) for every skeleton that has them, plus the median for people. With them, our walk / run match
+  Kenshi's on every Studio number. `python tools/build_gait_profiles.py "<Kenshi>/data"` rebuilds the file. It is
+  checked on load: wrong shapes or numbers are dropped, and that gait falls back to the summaries.
+- **`kenshi_gaits.json`:** summaries (the mean and one sine per body turn, the hips' second harmonic, four numbers of
+  the foot roll) drive our own shapes when the curves file is missing, or with `MOTIONLAB_NO_CURVES=1`.
 
 **Motion Lab Studio: see how natural a clip moves.**
 
@@ -314,7 +312,7 @@ python tests/fuzz/mutate.py
 ```
 
 `mutate.py` plants known bugs in a scratch copy and checks the fuzzers catch each one. Set `MOTIONLAB_NO_CURVES=1` to
-run any test the way CI and the public add-on see it (without your local curves file).
+run any test without the curves file (the summary gait).
 
 The Blender add-on has a headless test (`tests/blender/test_addon.py`, run it with `BLENDER_USER_RESOURCES` pointing at
 an empty folder so it never touches your own Blender setup).

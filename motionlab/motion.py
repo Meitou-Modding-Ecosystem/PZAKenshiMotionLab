@@ -917,7 +917,7 @@ def standard_clips(drv, ground_wings='hidden'):
                       # Kenshi's run plants a foot for ~15% of the stride, ours for 30%+ (the IK needs it): the second
                       # part of our stance is the toe push and no longer holds the hips down
                       push_from=min(1.0, max(0.3, float(g['duty']) / duty)) if (kind == 'run' and PUSH_ON) else 1.0)
-            if drv.plan == 'biped' and 'turns' not in g and 'turns_h1' in g:   # no local curves: the public summaries
+            if drv.plan == 'biped' and 'turns' not in g and 'turns_h1' in g:   # no curves file: the summaries
                 from .profiles import roll_from_summary                          # (one sine per turn, our own foot roll)
                 g = dict(g, turns=g['turns_h1'])
                 if 'roll_summary' in g: g['foot_roll'] = roll_from_summary(g['roll_summary'])

@@ -10,9 +10,9 @@ from . import mathx as mx
 from .model import Model, Skeleton
 
 DATA = os.path.join(os.path.dirname(__file__), 'data', 'kenshi_gaits.json')
-# curves measured from YOUR Kenshi install (git-ignored; tools/build_gait_profiles.py "<Kenshi>/data" makes it):
-# with it, people walk / run with Kenshi's own body turns, foot roll, arms and ankle path; without it, the built-in
-# procedural gait (summary numbers only)
+# curves measured from Kenshi's walk / run clips (tools/build_gait_profiles.py "<Kenshi>/data" rebuilds it): with it,
+# people walk / run with Kenshi's own body turns, foot roll, arms and ankle path; without it (or with
+# MOTIONLAB_NO_CURVES=1), the summary gait
 CURVES = os.path.join(os.path.dirname(__file__), 'data', 'kenshi_curves.json')
 CURVE_KEYS = ('turns', 'foot_roll', 'pelvis_y', 'arms', 'ankle_path')
 
@@ -262,7 +262,7 @@ def valid_curve(key, v):
 
 
 def add_summaries(g):
-    """Lossy public summaries of a gait's curves (the fallback gait when the local curves file is missing): the first
+    """Lossy summaries of a gait's curves (the fallback gait when the curves file is missing): the first
     harmonic (mean + one sine) of each body turn, the hips' mean and second harmonic, and four numbers of the foot
     roll (stance share, angle at heel strike, at toe-off, the swing's steepest). Nothing here rebuilds the clip."""
     if 'turns' in g:
@@ -323,7 +323,7 @@ def table():
         _cache = {}
         if os.path.exists(DATA):
             with open(DATA, encoding='utf-8') as f: _cache = json.load(f)
-        if os.path.exists(CURVES) and _cache and not os.environ.get('MOTIONLAB_NO_CURVES'):   # merge the local curves in
+        if os.path.exists(CURVES) and _cache and not os.environ.get('MOTIONLAB_NO_CURVES'):   # merge the curves in
             try:
                 with open(CURVES, encoding='utf-8') as f: cv = json.load(f)
                 for grp in ('skeletons', 'median'):
