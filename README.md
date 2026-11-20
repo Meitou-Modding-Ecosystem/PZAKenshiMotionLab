@@ -19,6 +19,11 @@ Two ways in:
   and jaw by their names and adds the motion: people get idle, walk and run (arms swing) plus **knocked down onto the
   back / onto the stomach, getting up from each, a forward roll, a dive roll, a standing jump, a long jump, a jump
   down from a ledge, two landings and a quick jump in stride from the walk or run**; four-legged animals get idle, walk, run (a trot) and a bite.
+  **From Meshy:** export a humanoid with the **3ds Max Biped** skeleton template (`Bip001 ...` bones): it is kept the
+  same way. A body in a T-pose or A-pose has its arms lowered to hang, as Kenshi's rest them, before any clip moves them
+  (the bind pose in the file is unchanged; the report says so), and whether feet roll heel-to-toe is decided for the
+  whole body, so a slightly lopsided model does not roll one foot and drag the other. Very unequal feet (one much
+  longer than the other) still slide in the run.
 - **A model with no rig, or a rig it does not know** (a Meshy export), is **auto-rigged** from its shape. Today that
   auto-rig knows insect-like bodies (legs, wings, antennae, abdomen); more body plans later.
 

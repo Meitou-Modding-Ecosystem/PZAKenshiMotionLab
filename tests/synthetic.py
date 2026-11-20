@@ -107,8 +107,10 @@ def make_quadruped():
     return _stick(QUAD, QUAD_ENDS, 'test_quadruped')
 
 
-def make_biped():
-    """A stick person rigged like Kenshi's characters (3ds Max Biped names, Bip01 ...): tube per bone, skinned rigidly."""
+def make_biped(tpose=False, toe_r=0.15, toe_l=0.15):
+    """A stick person rigged like Kenshi's characters (3ds Max Biped names, Bip01 ...): tube per bone, skinned rigidly.
+    tpose: arms straight out to the sides (as Meshy / Mixamo export them) instead of hanging; toe_l / toe_r: how far each
+    toe sits ahead of its ankle (a lopsided model's feet differ)."""
     from motionlab.model import Skeleton
     J = {  # name: (parent, world position)
         'Bip01': (None, (0, 1.0, 0)), 'Bip01 Pelvis': ('Bip01', (0, 1.0, 0)),
@@ -124,8 +126,15 @@ def make_biped():
         'Bip01 R Clavicle': ('Bip01 Spine2', (-0.05, 1.5, 0)), 'Bip01 R UpperArm': ('Bip01 R Clavicle', (-0.18, 1.5, 0)),
         'Bip01 R Forearm': ('Bip01 R UpperArm', (-0.2, 1.2, 0)), 'Bip01 R Hand': ('Bip01 R Forearm', (-0.21, 0.92, 0.02)),
     }
-    ends = {'Bip01 L Toe0': (0.1, 0.02, 0.24), 'Bip01 R Toe0': (-0.1, 0.02, 0.24), 'Bip01 Head': (0, 1.85, 0.02),
+    ends = {'Bip01 L Toe0': (0.1, 0.02, 0.24), 'Bip01 R Toe0': (-0.1, 0.02, toe_r + 0.09), 'Bip01 Head': (0, 1.85, 0.02),
             'Bip01 L Hand': (0.21, 0.8, 0.03), 'Bip01 R Hand': (-0.21, 0.8, 0.03)}
+    J['Bip01 R Toe0'] = ('Bip01 R Foot', (-0.1, 0.02, toe_r)); J['Bip01 L Toe0'] = ('Bip01 L Foot', (0.1, 0.02, toe_l))
+    ends['Bip01 L Toe0'] = (0.1, 0.02, toe_l + 0.09)
+    if tpose:
+        for sg, sd in ((1, 'L'), (-1, 'R')):
+            J['Bip01 %s Forearm' % sd] = ('Bip01 %s UpperArm' % sd, (sg * 0.48, 1.5, 0))
+            J['Bip01 %s Hand' % sd] = ('Bip01 %s Forearm' % sd, (sg * 0.76, 1.5, 0.02))
+            ends['Bip01 %s Hand' % sd] = (sg * 0.88, 1.5, 0.03)
     return _stick(J, ends, 'test_biped')
 
 

@@ -10,6 +10,9 @@
 import numpy as np
 from . import mathx as mx
 
+ARM_HANG_MAX_DEG = 30.0        # people: an upper arm resting further than this from hanging down is lowered (T-pose)
+FOOT_ROLL_MIN = 0.02           # feet roll when a toe sits this far (x height) ahead of its ankle, on ANY foot of the body
+
 
 def smoothstep(x):
     x = np.clip(x, 0.0, 1.0); return x * x * (3 - 2 * x)
@@ -54,6 +57,36 @@ class Rig:
         self.rest_tail = {nm: np.array(tails[nm]) for nm in tails}
         H = max(1e-6, max(w[:3, 3][1] for w in self.Wrest))
         self.height = H
+        self.arms_lowered = []                                    # rule counter: (upper arm, degrees lowered)
+        if rigmap.get('plan') == 'biped': self.lower_arms(rigmap.get('arms', []))
+
+    def lower_arms(self, arms, max_off=ARM_HANG_MAX_DEG):
+        """Arm motion (swing, measured curves, moves) is a turn away from Kenshi's rest pose, where the arms hang
+        straight down. A body exported in a T-pose (arms out to the sides) or an A-pose got the same turn from arms
+        out, and its arms flew up over its head in the run. Here an upper arm resting more than max_off degrees from
+        hanging is turned down (about the shoulder, the smallest turn) and the driver works from that pose instead.
+        Only the driver's rest changes: the skeleton's bind pose and the skin stay as they are."""
+        down = np.array([0.0, -1.0, 0.0]); moved = False
+        for e in arms:
+            bones = [self.idx[x] for x in e.get('bones', []) if x in self.idx]
+            if not bones: continue
+            up = bones[0]
+            nxt = bones[1] if len(bones) > 1 else (self.idx.get(e.get('hand')) if e.get('hand') in self.idx else None)
+            d = (self.Wrest[nxt][:3, 3] if nxt is not None else self.Wrest[up][:3, 3] + self.Wrest[up][:3, :3] @ self.dir_local[up]) - self.Wrest[up][:3, 3]
+            if np.linalg.norm(d) < 1e-9: continue
+            d = d / np.linalg.norm(d)
+            off = float(np.degrees(np.arccos(np.clip(d @ down, -1.0, 1.0))))
+            if off <= max_off: continue
+            D = mx.q_between(d, down)
+            self.rest_q[up] = self.local_from_world_delta(up, D)
+            pivot = self.Wrest[up][:3, 3]
+            for c in [up] + self._desc(up):                       # tails given in world space turn with the arm
+                nm = self.names[c]
+                if nm in self.rest_tail: self.rest_tail[nm] = pivot + mx.q_rotate(D, self.rest_tail[nm] - pivot)
+            self.Wrest = self.fk(self.rest_q, self.rest_t, self.rest_s)
+            self.qrest_w = np.array([mx.m3_to_q(w[:3, :3] / np.linalg.norm(w[:3, :3], axis=0)) for w in self.Wrest])
+            self.arms_lowered.append((self.names[up], round(off, 1))); moved = True
+        return moved
 
     def b(self, name): return self.idx[name]
 
@@ -229,15 +262,23 @@ class Driver:
         # feet that roll (people): the toe bone under the foot, the ball (toe joint) and an estimated heel point, each
         # as an offset from the ankle at rest; the foot pivots about the heel at heel strike and the ball at toe-off
         self.toe, self.pivots = {}, {}
+        cand = {}
         for e, _ in self.legs:
             fb = e.get('foot')
             if fb not in r.idx: continue
             kids = r.sk.children(r.b(fb))
             if not kids: continue
-            tb = kids[0]; ball = Wr[tb][:3, 3] - self.rest_tip[e['name']]
-            if ball[2] <= 0.02 * rig.height: continue                # no forward toe: not a person's foot
-            self.toe[e['name']] = tb
-            self.pivots[e['name']] = {'ball': ball, 'heel': np.array([0.0, ball[1], -0.35 * ball[2]])}
+            tb = kids[0]; cand[e['name']] = (tb, Wr[tb][:3, 3] - self.rest_tip[e['name']])
+        # whether feet roll is decided for the whole body, not foot by foot: a model a little lopsided (one spike foot
+        # 3.7 cm ahead of its ankle, the other 3.1 cm, either side of the cut-off) rolled one foot and not the other,
+        # and the gait built for rolling feet dragged the stiff one (1.2 m/s slip in the run)
+        roll_body = any(ball[2] > FOOT_ROLL_MIN * rig.height for tb, ball in cand.values())   # a forward toe: a person's foot
+        self.feet_unrolled = 0                                    # rule counter: feet that roll only because their pair does
+        for nm, (tb, ball) in cand.items():
+            if not roll_body or ball[2] <= 0.0: continue
+            if ball[2] <= FOOT_ROLL_MIN * rig.height: self.feet_unrolled += 1
+            self.toe[nm] = tb
+            self.pivots[nm] = {'ball': ball, 'heel': np.array([0.0, ball[1], -0.35 * ball[2]])}
         reach = [np.linalg.norm((self.rest_tip[e['name']] - Wr[c[0]][:3, 3])[[0, 2]]) for e, c in self.legs] or [0.5]
         self.reach = float(np.median(reach))
         lens = [np.linalg.norm(np.diff(r.chain_points(c, Wr), axis=0), axis=1).sum() for e, c in self.legs] or [1.0]

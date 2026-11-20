@@ -146,6 +146,8 @@ def rig_file(model_path, out_dir, log=print, **kw):
         model.skeleton, model.joints, model.weights = sk, J, Wk
     model.name = name
     rig = motion.Rig(sk, rigmap); drv = motion.Driver(rig, ground_wings=a.ground_wings)
+    for b, deg in rig.arms_lowered:
+        log('rest pose: %s rested %.0f degrees from hanging (a T- or A-pose): the motion lowers it first' % (b, deg))
     defs = motion.standard_clips(drv, ground_wings=a.ground_wings)
     if a.clips:
         want = a.clips.split(',') if isinstance(a.clips, str) else list(a.clips)
@@ -189,6 +191,9 @@ def rig_file(model_path, out_dir, log=print, **kw):
         miss = max(ck['ik_miss_m'].values(), default=0.0); slip = max(ck['slip_m_per_s'].values(), default=0.0)
         rep += '| %s | %.2f s | %s | %.2f m/s (%.1f Kenshi units/s) | %.3f m | %.3f m/s | %s |\n' % (
             c.name, c.times[-1], 'yes' if c.loop else 'no', c.speed, c.speed * 10, miss, slip, c.note)
+    for b, deg in rig.arms_lowered:
+        rep += ('\nArms: %s rests %.0f degrees from hanging down (a T- or A-pose); Kenshi rests its arms hanging, so '
+                'every clip lowers it first (the bind pose in the file is unchanged).\n' % (b, deg))
     rep += '\nWalking crouch: the body is lowered %.2f m while walking so the legs have room for a stride.\n' % drv.crouch
     rep += 'Round trip: the written .glb read back, rest pose max vertex difference %.2e m; %d clips found in the file.\n' % (rest_err, len(rc))
     if drv.wings: rep += ('\nWings on the ground: %s (wings shrink away on landing and grow back on take-off, 0.25 s, by '

@@ -19,6 +19,10 @@ MUTANTS = [
     ('motionlab/motion.py', "le = min(lift, 0.45 * drv.leg_lens.get(e['name'], lift / 0.45))", "le = lift", ['tests/test_animals.py']),
     ('motionlab/motion.py', "                if True:\n                    if hips is not None:",
      "                if hips is not None:\n                    if hips is not None:", ['tests/test_animals.py']),
+    # 2026-11-20, two T-posed / lopsided Meshy bodies (tests/test_rest_pose.py must notice each one undone)
+    ('motionlab/motion.py', "if rigmap.get('plan') == 'biped': self.lower_arms(rigmap.get('arms', []))", "pass", ['tests/test_rest_pose.py']),
+    ('motionlab/motion.py', "if not roll_body or ball[2] <= 0.0: continue", "if ball[2] <= FOOT_ROLL_MIN * rig.height: continue",
+     ['tests/test_rest_pose.py']),
 ]
 
 caught = 0
