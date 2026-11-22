@@ -272,6 +272,8 @@ blender -b --factory-startup --python tools/blender_check.py -- out/my_creature/
   auto-rig, gets its four walking legs but its claws are taken for wings and antennae; with its own Bip01 rig kept (the
   default) it walks as a four-legged body.
 - One mesh per file is read (the first skinned one, else the first mesh).
+- How many triangles to aim for: [docs/polygon-budgets.md](docs/polygon-budgets.md) (measured from every vanilla
+  mesh: a normal creature 4,000 to 8,000, a large one up to about 14,000).
 - Rendering is a small software renderer (numpy): fine for checking motion, not a beauty render.
 
 ## Tests
