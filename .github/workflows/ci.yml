@@ -1,9 +1,17 @@
 name: CI
-on:
+'on':
   pull_request:
-    branches: [master]
+    branches:
+    - master
+    - beta
+    - main
+    - release
   push:
-    branches: [master]
+    branches:
+    - master
+    - beta
+    - main
+    - release
 permissions:
   contents: read
 concurrency:
@@ -14,8 +22,43 @@ jobs:
     uses: TheIvoryDisaster/GutenStructure/.github/workflows/build-python.yml@fc0507fb376b8b8ba732795c7032c9cd81464a58
     with:
       requirements: requirements-ci.txt
-      test-command: |
-        python tests/test_pipeline.py
+      test-command: 'python tests/test_pipeline.py
+
         python tests/test_no_pillow.py
+
         python tests/fuzz/fuzz_glb.py 400
+
         python tools/build_addon.py
+
+        '
+  development-readiness:
+    name: Development readiness
+    if: always()
+    needs:
+    - build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - name: Require prerequisite checks
+      env:
+        RESULTS: ${{ toJSON(needs) }}
+        TARGET: ${{ github.base_ref || github.ref_name }}
+      run: "python - <<'PYCODE'\nimport json, os\nresults = json.loads(os.environ['RESULTS'])\nrequired = list(results)\n\
+        if not required or any(results[key]['result'] != 'success' for key in required):\n    raise SystemExit('A prerequisite\
+        \ failed, was cancelled, or was skipped')\nPYCODE\n"
+  release-readiness:
+    name: Release readiness
+    if: always()
+    needs:
+    - development-readiness
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - name: Require prerequisite checks
+      env:
+        RESULTS: ${{ toJSON(needs) }}
+        TARGET: ${{ github.base_ref || github.ref_name }}
+      run: "python - <<'PYCODE'\nimport json, os\nresults = json.loads(os.environ['RESULTS'])\ntarget = os.environ['TARGET']\n\
+        required = list(results) if target == 'release' else ['development-readiness']\nif not required or any(results[key]['result']\
+        \ != 'success' for key in required):\n    raise SystemExit('A prerequisite failed, was cancelled, or was skipped')\n\
+        PYCODE\n"
