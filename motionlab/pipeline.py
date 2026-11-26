@@ -15,11 +15,11 @@ def _load(path, skeleton=None):
 def _landmark_png(model, lm, path):
     from PIL import Image, ImageDraw
     from . import render
-    cols = {'legs': (220, 30, 30), 'wings': (30, 90, 230), 'antennae': (20, 160, 40)}
+    cols = {'legs': (220, 30, 30), 'arms': (220, 140, 20), 'wings': (30, 90, 230), 'antennae': (20, 160, 40)}
     def ov(img, z, pr):
         pil = Image.fromarray((np.clip(img, 0, 1) * 255).astype(np.uint8)); dr = ImageDraw.Draw(pil)
         for k, c in cols.items():
-            for e in lm[k]:
+            for e in lm.get(k, []):
                 uv, _ = pr(np.array(e['points'])); dr.line([tuple(p) for p in uv], fill=c, width=5)
                 dr.text(tuple(uv[-1] + 6), e['name'], fill=(0, 0, 0))
         uv, _ = pr(np.array(lm['spine'])); dr.line([tuple(p) for p in uv], fill=(200, 0, 200), width=5)
@@ -34,9 +34,9 @@ def _landmark_png(model, lm, path):
 
 def _apply_edits(lm, edited, log):
     """Take limb points / names from an edited landmarks file; keep the voxel analysis for binding."""
-    by = {e['name']: e for k in ('legs', 'wings', 'antennae') for e in lm[k]}
+    by = {e['name']: e for k in ('legs', 'arms', 'wings', 'antennae') for e in lm.get(k, [])}
     G = lm['_grid']; labels = lm['_labels']
-    for k in ('legs', 'wings', 'antennae'):
+    for k in ('legs', 'arms', 'wings', 'antennae'):
         if k not in edited: continue
         out = []
         for e in edited[k]:
@@ -50,17 +50,20 @@ def _apply_edits(lm, edited, log):
         lm[k] = out
     for k in ('spine', 'neck_z', 'waist_z', 'body_z'):
         if k in edited: lm[k] = edited[k]
-    log('landmarks: edits applied (%d legs, %d wings, %d antennae)' % (len(lm['legs']), len(lm['wings']), len(lm['antennae'])))
+    log('landmarks: edits applied (%d legs, %d arms, %d wings, %d antennae)' % (
+        len(lm['legs']), len(lm.get('arms', [])), len(lm['wings']), len(lm['antennae'])))
 
 
 class Options:
     """Settings of one rig run (the command line and the Blender add-on fill these)."""
     def __init__(self, **kw):
         self.skeleton = None; self.name = None; self.plan = 'insect'; self.landmarks = None
-        self.leg_bones = 4; self.wing_bones = 2; self.antenna_bones = 2; self.abdomen_bones = 3
+        self.leg_bones = 4; self.wing_bones = 2; self.antenna_bones = 2; self.abdomen_bones = 3; self.arm_bones = 2
         self.ground_wings = 'hidden'; self.clips = None; self.fps = 30; self.gifs = False; self.png = True
         self.references = None     # reference clip .glb files: each becomes a clip retargeted from its curves (people)
         self.own_rig = 'auto'      # 'auto': keep a skeleton we recognise (Kenshi Bip01, Motion Lab names); 'yes' / 'no'
+        self.budget = None         # optional polygon budget preset (creature|large|gear|weapon)
+        self.target_tris = None    # optional explicit triangle cap before auto-rigging
         for k, v in kw.items(): setattr(self, k, v)
 
 
@@ -134,6 +137,9 @@ def rig_file(model_path, out_dir, log=print, **kw):
         log('own rig: %d legs, %d arms, %d spring chains, tail %d bones, jaw %s' % (len(own['legs']), len(own['arms']),
             len(own['antennae']), len(own['spine']), 'yes' if own.get('jaw') else 'no'))
     else:
+        if a.budget is not None or a.target_tris is not None:
+            from . import decimate
+            src = decimate.decimate_model(src, decimate.resolve_target(a.budget, a.target_tris), log=log)
         model, lm = autorig.analyse(src, plan=a.plan, legs_bones=a.leg_bones, log=log)
         if a.landmarks:
             if isinstance(a.landmarks, dict): ed = a.landmarks
@@ -141,7 +147,8 @@ def rig_file(model_path, out_dir, log=print, **kw):
                 with open(a.landmarks, encoding='utf-8') as f: ed = json.load(f)
             _apply_edits(lm, ed, log)
         sk, rigmap = rigbuild.build_skeleton(lm, leg_bones=a.leg_bones, wing_bones=a.wing_bones,
-                                             antenna_bones=a.antenna_bones, abdomen_bones=a.abdomen_bones, log=log)
+                                             antenna_bones=a.antenna_bones, abdomen_bones=a.abdomen_bones,
+                                             arm_bones=a.arm_bones, log=log)
         J, Wk, st = rigbuild.bind(model, sk, rigmap, lm, shape.Surface(model), log=log)
         model.skeleton, model.joints, model.weights = sk, J, Wk
     model.name = name

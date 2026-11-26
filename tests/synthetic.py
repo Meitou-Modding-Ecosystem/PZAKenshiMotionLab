@@ -160,3 +160,75 @@ def _stick(J, ends, name):
     m.skeleton = sk; m.joints = np.array(Jn)[:, None].repeat(4, 1) * 0 + np.array(Jn)[:, None]
     m.weights = np.zeros((len(m.verts), 4)); m.weights[:, 0] = 1.0
     return m
+
+
+def _assemble(parts, name, yaw_deg=0.0):
+    V, T = [], []; base = 0
+    for v, t in parts: V.append(v); T.append(t + base); base += len(v)
+    V = np.concatenate(V); T = np.concatenate(T)
+    if yaw_deg:
+        a = np.radians(yaw_deg); R = np.array([[np.cos(a), 0, np.sin(a)], [0, 1, 0], [-np.sin(a), 0, np.cos(a)]])
+        V = V @ R.T
+    m = Model(); m.name = name; m.verts = V; m.tris = T
+    n = np.zeros_like(V)
+    fn = np.cross(V[T[:, 1]] - V[T[:, 0]], V[T[:, 2]] - V[T[:, 0]])
+    for k in range(3): np.add.at(n, T[:, k], fn)
+    m.normals = n / np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-12)
+    m.uvs = np.zeros((len(V), 2)); m.parts = [{'material': None, 'tri_start': 0, 'tri_count': len(T)}]
+    return m
+
+
+def make_unrigged_quadruped(yaw_deg=0.0):
+    """Procedural four-legged animal mesh (no skeleton) for auto-rigging under plan='quadruped'."""
+    parts = [
+        _ellipsoid(np.array([0, 0.85, 0.0]), np.array([0.28, 0.26, 0.65])),   # torso
+        _ellipsoid(np.array([0, 1.05, 0.78]), np.array([0.20, 0.19, 0.25])),  # head
+        _ellipsoid(np.array([0, 0.85, -0.78]), np.array([0.14, 0.14, 0.30])), # rump/tail base
+    ]
+    for side in (1, -1):
+        for z in (0.38, -0.38):
+            hip = np.array([side * 0.22, 0.78, z])
+            knee = np.array([side * 0.26, 0.40, z + (0.04 if z > 0 else -0.06)])
+            foot = np.array([side * 0.24, 0.0, z])
+            parts.append(_tube([hip, knee, foot], 0.065))
+        parts.append(_tube([np.array([side * 0.12, 1.20, 0.78]), np.array([side * 0.18, 1.48, 0.86])], 0.03))
+    return _assemble(parts, 'test_unrigged_quad', yaw_deg)
+
+
+def make_unrigged_biped(yaw_deg=0.0):
+    """Procedural upright humanoid mesh (no skeleton) for auto-rigging under plan='biped'."""
+    parts = [
+        _ellipsoid(np.array([0, 1.15, 0.0]), np.array([0.22, 0.34, 0.15])),  # torso
+        _ellipsoid(np.array([0, 1.66, 0.0]), np.array([0.13, 0.16, 0.14])),  # head
+    ]
+    for side in (1, -1):
+        parts.append(_tube([np.array([side * 0.13, 0.90, 0.0]), np.array([side * 0.14, 0.45, 0.02]), np.array([side * 0.14, 0.0, 0.0])], 0.065))
+        parts.append(_tube([np.array([side * 0.20, 1.40, 0.0]), np.array([side * 0.52, 1.32, 0.0]), np.array([side * 0.78, 1.18, 0.0])], 0.048))
+    return _assemble(parts, 'test_unrigged_biped', yaw_deg)
+
+
+def make_unrigged_crab(yaw_deg=0.0):
+    """Procedural crab mesh (wide shell, 6 walking legs, 2 raised front claws) for plan='crab'."""
+    parts = [_ellipsoid(np.array([0, 0.55, 0.0]), np.array([0.55, 0.22, 0.42]))]
+    for side in (1, -1):
+        for z in (0.12, -0.08, -0.26):
+            hip = np.array([side * 0.45, 0.50, z])
+            knee = np.array([side * 0.85, 0.70, z - 0.05])
+            foot = np.array([side * 1.10, 0.0, z - 0.10])
+            parts.append(_tube([hip, knee, foot], 0.045))
+        parts.append(_tube([np.array([side * 0.35, 0.55, 0.32]), np.array([side * 0.65, 0.68, 0.65]), np.array([side * 0.45, 0.72, 0.95])], 0.06))
+    return _assemble(parts, 'test_unrigged_crab', yaw_deg)
+
+
+def make_unrigged_bird(yaw_deg=0.0):
+    """Procedural bird mesh (2 legs, 2 wide wings, tail) for plan='bird'."""
+    parts = [
+        _ellipsoid(np.array([0, 0.85, 0.0]), np.array([0.24, 0.24, 0.48])),   # torso
+        _ellipsoid(np.array([0, 1.12, 0.52]), np.array([0.14, 0.14, 0.20])),  # head + beak
+        _ellipsoid(np.array([0, 0.82, -0.60]), np.array([0.14, 0.08, 0.28])), # tail
+    ]
+    for side in (1, -1):
+        parts.append(_tube([np.array([side * 0.12, 0.68, 0.0]), np.array([side * 0.13, 0.35, -0.05]), np.array([side * 0.13, 0.0, 0.02])], 0.045))
+        parts.append(_plate(np.array([side * 0.20, 0.96, 0.05]), np.array([side * 0.92, 0.12, -0.35]),
+                            np.array([0, 0, 1]), 1.05, 0.34))
+    return _assemble(parts, 'test_unrigged_bird', yaw_deg)

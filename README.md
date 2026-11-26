@@ -133,12 +133,32 @@ In `out/my_creature/` you get:
 Other commands:
 
 ```bash
+python -m motionlab export out/my_creature/My_Creature_rigged.glb -o out/kenshi_asset --name my_creature
+```
+
+Exports a rigged `.glb` directly to Kenshi / Meitou files without Blender: binary Ogre `[MeshSerializer_v1.8]` `.mesh` (skinned, 3 weights per vertex, Kenshi-handed tangents), fresh `[Serializer_v1.80]` `.skeleton` with all baked clips, Kenshi-packed `.dds` textures (`_d.dds` BC3 with gloss in alpha, `_n.dds` with Y-flipped green, `_m.dds` metalness), and a `.asset.json` manifest.
+
+```bash
+python -m motionlab decimate "Raw Model.glb" -o out/ready.glb --budget creature
+```
+
+Reduces a high-poly `.glb` to Kenshi's measured [docs/polygon-budgets.md](docs/polygon-budgets.md) (`creature` 6,000, `large` 12,000, `gear` 3,500, `weapon` 1,200, or `--target-tris N`). You can also pass `--budget` or `--target-tris` straight to `motionlab rig`.
+
+```bash
+python -m motionlab sequence out/human/human_male_rigged.glb --steps "walk:2,run:1.5:0.3,jump_run::0.1,roll_dive::0.2" -o out/combo.glb
+```
+
+Chains multiple clips into one continuous clip with inertialized joins.
+
+```bash
 python -m motionlab view out/my_creature/My_Creature_rigged.glb --clip walk -o walk.gif
 ```
 
 ```bash
 python -m motionlab info "My Creature.glb"
 ```
+
+Auto-rigging supports `--plan insect|quadruped|biped|crab|bird|auto`.
 
 A Kenshi model straight from the game files (rig kept; `--own-rig no` forces the auto-rig):
 

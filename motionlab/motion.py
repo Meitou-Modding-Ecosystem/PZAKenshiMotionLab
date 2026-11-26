@@ -1008,7 +1008,9 @@ def standard_clips(drv, ground_wings='hidden'):
         run_T, run_duty = 0.6, 0.45; run_stride = min(0.9 * reach, 0.85 * drv.stride_for(drv.run_crouch))
         walk = walker(walk_stride, 0.10 * H, walk_duty, 0.008, 2.0, 5, drv.crouch)
         run = walker(run_stride, 0.12 * H, run_duty, 0.012, 7.0, 3, drv.run_crouch)
-    gait = {'insect': 'alternating gait (tripod for six legs)', 'quadruped': 'trot (diagonal pairs)', 'biped': 'walk, arms swing'}.get(drv.plan, 'alternating gait')
+    gait = {'insect': 'alternating gait (tripod for six legs)', 'quadruped': 'trot (diagonal pairs)',
+            'biped': 'walk, arms swing', 'crab': 'alternating scuttling gait, claws sway',
+            'bird': 'bipedal walk, wings fold'}.get(drv.plan, 'alternating gait')
     clips = [
         ClipDef('idle', 2.4, idle, True, 0.0, 'breathing, head looks around, feet planted'),
         ClipDef('walk', walk_T, walk, True, walk_stride / (walk_duty * walk_T), gait + ', feet planted in stance'),

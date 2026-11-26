@@ -27,11 +27,9 @@ def _seg_dist(P, a, b):
     return np.linalg.norm(P - (a + t[:, None] * ab), axis=1)
 
 
-def build_skeleton(lm, leg_bones=4, wing_bones=2, antenna_bones=2, abdomen_bones=3, log=print):
-    sp = np.array(lm['spine']); zs = sp[:, 2]
-    def S(z): return np.array([np.interp(z, zs, sp[:, 0]), np.interp(z, zs, sp[:, 1]), z])
-    zmin, zmax = lm['body_z']; neck, waist = lm['neck_z'], lm['waist_z']
-    zc = 0.5 * (neck + waist)
+def build_skeleton(lm, leg_bones=4, wing_bones=2, antenna_bones=2, abdomen_bones=3, arm_bones=2, log=print):
+    sp = np.array(lm['spine'])
+    vertical = lm.get('spine_axis') == 'y'
     sk = Skeleton(); tails = {}; heads = {}
     def add(name, parent, head, tail):
         d = np.asarray(tail) - np.asarray(head)
@@ -39,15 +37,30 @@ def build_skeleton(lm, leg_bones=4, wing_bones=2, antenna_bones=2, abdomen_bones
         i = sk.add(name, parent, np.asarray(head, float), q)
         tails[name] = [float(x) for x in tail]; heads[name] = [float(x) for x in head]
         return i
-    root = add('root', -1, [S(zc)[0], 0.0, zc], [S(zc)[0], 0.0, zc + 0.1 * (zmax - zmin)])
-    body = add('body', root, S(zc), S(neck))
-    head = add('head', body, S(neck), S(zmax))
-    zz = np.linspace(waist, zmin, abdomen_bones + 1)
-    abd = []; par = body
-    for k in range(abdomen_bones):
-        par = add('abdomen_%02d' % (k + 1), par, S(zz[k]), S(zz[k + 1])); abd.append(par)
-    spine_bones = [body, head] + abd
-    seg = {body: (S(waist), S(neck))}       # the thorax bone covers waist..neck for this choice (its pivot is mid-thorax)
+    if vertical:
+        ys = sp[:, 1]
+        def Sy(y): return np.array([np.interp(y, ys, sp[:, 0]), y, np.interp(y, ys, sp[:, 2])])
+        ymin, ymax = lm['body_z']; neck, waist = lm['neck_z'], lm['waist_z']
+        root = add('root', -1, [Sy(waist)[0], 0.0, Sy(waist)[2]], [Sy(waist)[0], 0.0, Sy(waist)[2] + 0.1 * (ymax - ymin)])
+        body = add('body', root, Sy(waist), Sy(neck))
+        head = add('head', body, Sy(neck), Sy(ymax))
+        abd = []
+        spine_bones = [body, head]
+        seg = {body: (Sy(waist), Sy(neck))}
+    else:
+        zs = sp[:, 2]
+        def S(z): return np.array([np.interp(z, zs, sp[:, 0]), np.interp(z, zs, sp[:, 1]), z])
+        zmin, zmax = lm['body_z']; neck, waist = lm['neck_z'], lm['waist_z']
+        zc = 0.5 * (neck + waist)
+        root = add('root', -1, [S(zc)[0], 0.0, zc], [S(zc)[0], 0.0, zc + 0.1 * (zmax - zmin)])
+        body = add('body', root, S(zc), S(neck))
+        head = add('head', body, S(neck), S(zmax))
+        zz = np.linspace(waist, zmin, abdomen_bones + 1)
+        abd = []; par = body
+        for k in range(abdomen_bones):
+            par = add('abdomen_%02d' % (k + 1), par, S(zz[k]), S(zz[k + 1])); abd.append(par)
+        spine_bones = [body, head] + abd
+        seg = {body: (S(waist), S(neck))}       # the thorax bone covers waist..neck for this choice (its pivot is mid-thorax)
     def nearest_spine(p):
         best, bi = 1e18, body
         for b in spine_bones:
@@ -58,11 +71,11 @@ def build_skeleton(lm, leg_bones=4, wing_bones=2, antenna_bones=2, abdomen_bones
         return bi
     rigmap = {'plan': lm.get('plan', 'insect'), 'units': 'metres', 'forward': '+Z', 'up': '+Y',
               'root': 'root', 'body': 'body', 'head': 'head', 'spine': [sk.names[b] for b in abd],
-              'legs': [], 'wings': [], 'antennae': []}
+              'legs': [], 'arms': [], 'wings': [], 'antennae': []}
     H = lm['height']
-    for kind, nb, key, parent_rule in (('leg', leg_bones, 'legs', 'nearest'), ('wing', wing_bones, 'wings', 'body'),
-                                       ('antenna', antenna_bones, 'antennae', 'head')):
-        for e in lm[key]:
+    for kind, nb, key, parent_rule in (('leg', leg_bones, 'legs', 'nearest'), ('arm', arm_bones, 'arms', 'body'),
+                                       ('wing', wing_bones, 'wings', 'body'), ('antenna', antenna_bones, 'antennae', 'head')):
+        for e in lm.get(key, []):
             pts = np.array(e['points'])
             j = fit_polyline(pts, nb)
             par = nearest_spine(j[0]) if parent_rule == 'nearest' else (body if parent_rule == 'body' else head)
@@ -75,8 +88,9 @@ def build_skeleton(lm, leg_bones=4, wing_bones=2, antenna_bones=2, abdomen_bones
             if kind == 'leg': ent['lifted'] = bool(j[-1][1] > 0.15 * H)
             rigmap[key].append(ent)
     rigmap['tails'] = tails
-    log('skeleton: %d bones (%d legs x %d, %d wings x %d, %d antennae x %d, abdomen %d)' % (
-        len(sk), len(lm['legs']), leg_bones, len(lm['wings']), wing_bones, len(lm['antennae']), antenna_bones, abdomen_bones))
+    log('skeleton: %d bones (%d legs x %d, %d arms x %d, %d wings x %d, %d antennae x %d, abdomen %d)' % (
+        len(sk), len(lm['legs']), leg_bones, len(lm.get('arms', [])), arm_bones, len(lm['wings']), wing_bones,
+        len(lm['antennae']), antenna_bones, len(abd)))
     return sk, rigmap
 
 
@@ -102,8 +116,8 @@ def bind(model, sk, rigmap, lm, surface=None, smooth_iters=2, power=4.0, max_inf
     spine = {names.index(x) for x in ['body', 'head'] + rigmap['spine']}
     body_allowed = set(spine)
     part_bones = {}
-    for key in ('legs', 'wings', 'antennae'):
-        for ent, e in zip(rigmap[key], lm[key]):
+    for key in ('legs', 'arms', 'wings', 'antennae'):
+        for ent, e in zip(rigmap.get(key, []), lm.get(key, [])):
             bs = [names.index(x) for x in ent['bones']]
             body_allowed.add(bs[0])
             part_bones.setdefault(e['_part'], set()).update(bs + [names.index(ent['parent'])])
@@ -162,8 +176,8 @@ def report(model, sk, rigmap, J, Wk, stats, lm, source_info=None):
     lines.append('## Limbs found')
     lines.append('| Limb | Bones | Hangs from | Tip (m) | Note |')
     lines.append('|---|---|---|---|---|')
-    for key in ('legs', 'wings', 'antennae'):
-        for e in rigmap[key]:
+    for key in ('legs', 'arms', 'wings', 'antennae'):
+        for e in rigmap.get(key, []):
             note = 'lifted: its tip rests off the ground, it swings but does not plant' if e.get('lifted') else ''
             lines.append('| %s | %s | %s | (%.2f, %.2f, %.2f) | %s |' % (e['name'], ', '.join(e['bones']), e['parent'], *e['tip'], note))
     lines.append('')

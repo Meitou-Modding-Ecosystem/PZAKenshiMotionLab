@@ -18,7 +18,8 @@ from .model import Skeleton
 from .shape import Surface
 from . import voxel
 
-VERSION = '0.2.0'
+VERSION = '0.3.0'
+PLANS = ('insect', 'quadruped', 'biped', 'crab', 'bird')
 
 
 # ------------------------------------------------------------------ frame
@@ -101,15 +102,35 @@ def fit_polyline(points, k):
 
 # ------------------------------------------------------------------ analyse
 
+def _guess_plan(P):
+    """Heuristic plan pick for --plan auto from bounding proportions."""
+    lo, hi = P.min(0), P.max(0)
+    dx, dy, dz = hi - lo
+    horiz = max(dx, dz, 1e-6)
+    if dy > 1.05 * horiz:
+        return 'biped'
+    return 'insect'
+
+
 def analyse(model, plan='insect', legs_bones=4, log=print):
     """Return (straightened model, landmarks dict)."""
+    if plan == 'auto':
+        plan = _guess_plan(model.verts)
+        log('plan auto -> %s' % plan)
+    if plan not in PLANS:
+        raise ValueError('unknown body plan %r (known: %s)' % (plan, ', '.join(PLANS)))
     m = model
     S = Surface(m)
     lo, hi = S.P.min(0), S.P.max(0); H = hi[1] - lo[1]
     upper = S.P[S.P[:, 1] > lo[1] + 0.55 * H]
+    if len(upper) < 10:
+        upper = S.P
     c = upper.mean(0)
     X = upper[:, [0, 2]] - c[[0, 2]]
     w, v = np.linalg.eigh(X.T @ X); ax = v[:, -1]
+    if plan in ('biped', 'crab'):
+        # bipeds (shoulders) and crabs (wide carapace) have their widest horizontal axis along X, so forward is perpendicular
+        ax = np.array([-ax[1], ax[0]])
     if ax[1] < 0: ax = -ax
     yaw = np.arctan2(ax[0], ax[1])
     R = yaw_matrix(-yaw); t = -(R @ np.array([c[0], 0, c[2]])); t[1] = -lo[1]
@@ -117,7 +138,7 @@ def analyse(model, plan='insect', legs_bones=4, log=print):
     for it in range(2):
         m2 = transformed(model, R, t)
         S = Surface(m2)
-        lm = _analyse_frame(m2, S, legs_bones, log)
+        lm = _analyse_frame(m2, S, legs_bones, log, plan=plan)
         feet = [l for l in lm['legs']]
         Ls = sorted([l for l in feet if l['side'] == 'L'], key=lambda l: -l['points'][-1][2])
         Rs = sorted([l for l in feet if l['side'] == 'R'], key=lambda l: -l['points'][-1][2])
@@ -125,7 +146,7 @@ def analyse(model, plan='insect', legs_bones=4, log=print):
         mids = np.array([(np.array(a['points'][-1]) + np.array(b['points'][-1])) / 2 for a, b in zip(Ls, Rs)])
         hips = np.array([(np.array(a['points'][0]) + np.array(b['points'][0])) / 2 for a, b in zip(Ls, Rs)])
         q = np.r_[mids, hips]
-        if len(q) >= 2:
+        if len(q) >= 2 and float(np.ptp(q[:, 2])) > 0.05 * H:
             A = np.c_[np.ones(len(q)), q[:, 2]]
             (a0, a1), *_ = np.linalg.lstsq(A, q[:, 0], rcond=None)
             dyaw = np.arctan(a1)
@@ -134,7 +155,7 @@ def analyse(model, plan='insect', legs_bones=4, log=print):
             t[1] = 0
             turn = {'yaw_deg': float(np.degrees(np.arctan2(R[0, 2], R[0, 0]))), 'move': [float(x) for x in t]}
             log('frame: mirror fit of %d leg pairs: turned %.1f deg more, centred %.3f' % (len(mids), np.degrees(-dyaw), -a0))
-    m2.verts[:, 1] -= m2.verts[:, 1].min(); t[1] -= 0  # keep feet on y=0
+    m2.verts[:, 1] -= m2.verts[:, 1].min()
     lm['frame'] = {'turn_about_y_deg': turn['yaw_deg'], 'R': R.tolist(), 't': [float(x) for x in t],
                    'note': 'mesh turned so the body faces +Z, centred on the leg pairs, lowest point on y=0'}
     lm['plan'] = plan; lm['version'] = VERSION
@@ -210,12 +231,13 @@ def _smooth(points, it=2):
     return p
 
 
-def _analyse_frame(m, S, legs_bones, log):
+def _analyse_frame(m, S, legs_bones, log, plan='insect'):
     P = m.verts
     lo, hi = P.min(0), P.max(0); H = hi[1] - lo[1]; size = float(np.linalg.norm(hi - lo))
     vs = size / 140.0
     G = voxel.Grid(P, m.tris, vs)
-    r = max(2, int(round(0.03 * size / vs)))
+    r_frac = 0.035 if plan == 'biped' else 0.03
+    r = max(2, int(round(r_frac * size / vs)))
     body = voxel.sphere_dilate(voxel.sphere_erode(G.solid, r), r) & G.solid
     keep = voxel.components(body)
     body = np.zeros_like(body)
@@ -228,7 +250,7 @@ def _analyse_frame(m, S, legs_bones, log):
     labels = np.full(G.shape, -1, np.int32)
     labels[body] = -2
     for ci, comp in enumerate(comps): labels[comp[:, 0], comp[:, 1], comp[:, 2]] = ci
-    legs, wings, ants, other = [], [], [], []
+    legs, arms, wings, ants, other = [], [], [], [], []
     min_len = 0.12 * H / vs
     sup = 0.12 * H / vs
     for ci, comp in enumerate(comps):
@@ -251,12 +273,61 @@ def _analyse_frame(m, S, legs_bones, log):
             p = line[-1]; root = line[0]
             length = float(np.sum(np.linalg.norm(np.diff(line, axis=0), axis=1)))
             e = {'points': line.tolist(), 'length': length, 'part_voxels': len(comp), '_part': ci}
-            if p[1] < lo[1] + 0.3 * H: legs.append(e)
-            elif root[1] > lo[1] + 0.55 * H and p[2] < root[2] + 0.05 * size and p[1] > lo[1] + 0.45 * H: wings.append(e)
-            elif p[2] > 0 and p[1] > lo[1] + 0.4 * H: ants.append(e)
-            else: other.append(e)
-    # spine: centroid of body voxels per slice along z, smoothed
+            if plan == 'biped':
+                if p[1] < lo[1] + 0.25 * H: legs.append(e)
+                elif root[1] > lo[1] + 0.45 * H and abs(p[0]) > 0.06 * size: arms.append(e)
+                else: other.append(e)
+            elif plan == 'quadruped':
+                if p[1] < lo[1] + 0.35 * H: legs.append(e)
+                elif p[2] > root[2] and p[1] > lo[1] + 0.50 * H: ants.append(e)  # ears / horns
+                else: other.append(e)
+            elif plan == 'crab':
+                if p[1] < lo[1] + 0.30 * H: legs.append(e)
+                elif p[1] > lo[1] + 0.15 * H: arms.append(e)                      # claws / pincers (not wings!)
+                else: other.append(e)
+            elif plan == 'bird':
+                if p[1] < lo[1] + 0.30 * H: legs.append(e)
+                elif root[1] > lo[1] + 0.35 * H and abs(p[0]) > 0.18 * size: wings.append(e)
+                else: other.append(e)
+            else:  # insect
+                if p[1] < lo[1] + 0.3 * H: legs.append(e)
+                elif root[1] > lo[1] + 0.55 * H and p[2] < root[2] + 0.05 * size and p[1] > lo[1] + 0.45 * H: wings.append(e)
+                elif p[2] > 0 and p[1] > lo[1] + 0.4 * H: ants.append(e)
+                else: other.append(e)
+    # spine: centroid of body voxels per slice along z (or y for upright bipeds), smoothed
     bv = G.centre(np.argwhere(body))
+    if plan == 'biped':
+        ymin, ymax = float(bv[:, 1].min()), float(bv[:, 1].max())
+        nb = 24; edges = np.linspace(ymin, ymax, nb + 1); spine, area = [], []
+        for i in range(nb):
+            s = bv[(bv[:, 1] >= edges[i]) & (bv[:, 1] <= edges[i + 1])]
+            if len(s) >= 2:
+                spine.append([float(np.mean(s[:, 0])), float((edges[i] + edges[i + 1]) / 2), float(np.mean(s[:, 2]))]); area.append(len(s))
+        spine = _smooth(np.array(spine), 3); area = np.array(area, float)
+        ys = spine[:, 1]
+        waist_y = float(ymin + 0.15 * (ymax - ymin))
+        neck_y = float(ymin + 0.78 * (ymax - ymin))
+        def cx_at_y(y): return float(np.interp(y, ys, spine[:, 0]))
+        def side_of(e): return 'L' if e['points'][-1][0] > cx_at_y(e['points'][0][1]) else 'R'
+        for l in legs: l['side'] = side_of(l)
+        for side in 'LR':
+            sl = sorted([l for l in legs if l['side'] == side], key=lambda l: -l['length'])[:1]
+            for i, l in enumerate(sl): l['name'] = 'leg_%s%d' % (side, i + 1)
+        legs = [l for l in legs if 'name' in l]
+        for a in arms: a['side'] = side_of(a)
+        for side in 'LR':
+            sa = sorted([a for a in arms if a['side'] == side], key=lambda a: -a['length'])[:1]
+            for i, a in enumerate(sa): a['name'] = 'arm_%s' % side
+        arms = [a for a in arms if 'name' in a]
+        lm = {'height': float(H), 'size': size, 'voxel': vs, 'body_open_radius_vox': r, 'spine_axis': 'y',
+              'spine': spine.tolist(), 'spine_area': area.tolist(),
+              'neck_z': neck_y, 'waist_z': waist_y, 'body_z': [ymin, ymax],
+              'legs': sorted(legs, key=lambda e: e['name']), 'arms': sorted(arms, key=lambda e: e['name']),
+              'wings': [], 'antennae': [],
+              'other': [{'tip': e['points'][-1], 'length': e['length']} for e in other]}
+        lm['_grid'] = G; lm['_body'] = body; lm['_labels'] = labels
+        log('analyse (biped): %d legs, %d arms, %d other limb ends ignored' % (len(legs), len(arms), len(other)))
+        return lm
     zmin, zmax = bv[:, 2].min(), bv[:, 2].max()
     nb = 28; edges = np.linspace(zmin, zmax, nb + 1); spine, area = [], []
     for i in range(nb):
@@ -275,11 +346,12 @@ def _analyse_frame(m, S, legs_bones, log):
     i = pk
     while i - 1 >= 0 and a_s[i - 1] >= 0.6 * amax: i -= 1
     waist_z = float(zs[max(i - 1, 0)] + 0.5 * (zs[1] - zs[0]))
-    # insect rule: the walking legs hang from the thorax, so the waist sits just behind the rearmost planted hip;
-    # and the abdomen is at least 30 % of the body (a waist found far back leaves the abdomen bones a stub)
+    # body rule: walking legs hang from the torso, so the waist sits behind the rearmost planted hip;
+    # keep at least 25-30% of the body for abdomen / tail
     L_body = float(zmax - zmin)
     planted = [l['points'][0][2] for l in legs if l['points'][-1][1] <= lo[1] + 0.15 * H]
-    cands = [waist_z, float(zmin + 0.30 * L_body)]
+    min_rear = 0.20 if plan in ('quadruped', 'crab', 'bird') else 0.30
+    cands = [waist_z, float(zmin + min_rear * L_body)]
     if planted: cands.append(float(min(planted) - 0.05 * L_body))
     waist_z = min(max(cands), neck_z - 0.2 * L_body)
     def cx_at(z): return float(np.interp(z, zs, spine[:, 0]))
@@ -289,24 +361,25 @@ def _analyse_frame(m, S, legs_bones, log):
     for side in 'LR':
         sl = sorted([l for l in legs if l['side'] == side], key=lambda l: -l['points'][0][2])
         for i, l in enumerate(sl): l['name'] = 'leg_%s%d' % (side, i + 1)
-    # wings / antennae: keep the long ones (spikes are short), pair them by their roots' x
+    # wings / antennae / arms (claws): keep the long ones (spikes are short), pair them by their roots' x
     def keep_long(grp, frac, key='length'):
         if not grp: return grp
         mx_ = max(e[key] for e in grp)
         return sorted([e for e in grp if e[key] >= frac * mx_], key=lambda e: -e[key])
-    # insect wings hinge on the top of the thorax's rear part, even when the mesh lays them over the abdomen;
-    # a wing's size is its reach from that hinge (where it happens to touch the body says little)
-    wz = waist_z + 0.3 * (neck_z - waist_z)
+    wz = waist_z + (0.55 if plan == 'bird' else 0.3) * (neck_z - waist_z)
     sl = bv[np.abs(bv[:, 2] - wz) <= 2 * vs]
     if not len(sl): sl = bv
     top = float(np.percentile(sl[:, 1], 95)); half = 0.5 * float(np.percentile(sl[:, 0], 95) - np.percentile(sl[:, 0], 5))
     def hinge_for(e):
         sgn = 1 if e['points'][-1][0] > cx_at(wz) else -1
         return [cx_at(wz) + sgn * 0.35 * half, top - 0.5 * r * vs, wz]
-    wings = [e for e in wings if e['points'][-1][2] < wz]       # a wing reaches back from its hinge
+    if plan == 'insect':
+        wings = [e for e in wings if e['points'][-1][2] < wz]       # insect wing reaches back from its hinge
     for e in wings: e['reach'] = float(np.linalg.norm(np.array(e['points'][-1]) - hinge_for(e)))
-    wings = keep_long(wings, 0.75, 'reach'); ants = keep_long(ants, 0.6)
-    for grp, nm in ((wings, 'wing'), (ants, 'antenna')):
+    wings = keep_long(wings, 0.75 if plan == 'insect' else 0.6, 'reach')
+    ants = keep_long(ants, 0.6)
+    arms = keep_long(arms, 0.55)
+    for grp, nm in ((wings, 'wing'), (ants, 'antenna'), (arms, 'arm')):
         if len(grp) == 2:
             a_, b_ = sorted(grp, key=lambda e: e['points'][0][0] + e['points'][-1][0])
             a_['side'], b_['side'] = 'R', 'L'
@@ -319,14 +392,15 @@ def _analyse_frame(m, S, legs_bones, log):
         hinge = hinge_for(e)
         if np.linalg.norm(np.array(e['points'][0]) - hinge) > 2 * vs: e['points'] = [hinge] + e['points']
         e['hinge'] = hinge
-    lm = {'height': float(H), 'size': size, 'voxel': vs, 'body_open_radius_vox': r, 'spine': spine.tolist(),
-          'spine_area': area.tolist(), 'neck_z': neck_z, 'waist_z': waist_z,
+    lm = {'height': float(H), 'size': size, 'voxel': vs, 'body_open_radius_vox': r, 'spine_axis': 'z',
+          'spine': spine.tolist(), 'spine_area': area.tolist(), 'neck_z': neck_z, 'waist_z': waist_z,
           'body_z': [float(zmin), float(zmax)],
-          'legs': sorted(legs, key=lambda e: e['name']), 'wings': wings, 'antennae': ants,
+          'legs': sorted(legs, key=lambda e: e['name']), 'arms': sorted(arms, key=lambda e: e['name']),
+          'wings': wings, 'antennae': ants,
           'other': [{'tip': e['points'][-1], 'length': e['length']} for e in other]}
     lm['_grid'] = G; lm['_body'] = body; lm['_labels'] = labels
-    log('analyse: %d legs, %d wings, %d antennae, %d other limb ends ignored (body opening %d voxels of %.3f)' % (
-        len(legs), len(wings), len(ants), len(other), r, vs))
+    log('analyse (%s): %d legs, %d arms, %d wings, %d antennae, %d other limb ends ignored (body opening %d voxels of %.3f)' % (
+        plan, len(legs), len(arms), len(wings), len(ants), len(other), r, vs))
     return lm
 
 
