@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "pza_motion_lab"
-version = "0.2.0"
+version = "0.3.0"
 name = "PZA's Kenshi Motion Lab"
 tagline = "Auto-rig a model and animate it from code, for Kenshi"
 maintainer = "PZA"

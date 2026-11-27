@@ -1,6 +1,6 @@
 # PZA's Kenshi Motion Lab
 
-Author: PZA. Licence: GPLv3 (see `LICENSE`). **Status: beta (0.2.0).** It works end to end on our test bodies and creatures; it
+Author: PZA. Licence: GPLv3 (see `LICENSE`). **Status: beta (0.3.0).** It works end to end on our test bodies and creatures; it
 has not been tried in Kenshi itself yet (see *Known gaps*). Feedback and broken models are welcome as issues.
 
 Rig and animate a model **from code** instead of hand-animating it. Give it a model (a Meshy / Blender `.glb`, or a
